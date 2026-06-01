@@ -1,0 +1,8 @@
+PyQt6>=6.4.0
+huggingface-hub>=0.20.0
+modelscope>=1.20.0
+requests>=2.31.0
+cryptography>=41.0.0
+keyring>=24.0.0
+pytest>=7.4.0
+pytest-qt>=4.2.0
