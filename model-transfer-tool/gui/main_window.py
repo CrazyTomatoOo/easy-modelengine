@@ -7,9 +7,10 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QSplitter, QStatusBar,
-    QMessageBox, QPushButton
+    QMessageBox, QPushButton, QDialog
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction
 
 from core.database import Database
 from core.task_manager import TaskManager
@@ -21,6 +22,8 @@ from gui.wizard_panel import WizardPanel
 from gui.task_panel import TaskPanel
 from gui.log_panel import LogPanel
 from gui.theme import ThemeManager
+from gui.server_config_dialog import ServerConfigDialog
+from gui.proxy_dialog import ProxyDialog
 
 
 class MainWindow(QMainWindow):
@@ -94,6 +97,26 @@ class MainWindow(QMainWindow):
         self.theme_btn.toggled.connect(self._toggle_theme)
         self.status_bar.addPermanentWidget(self.theme_btn)
 
+        # 创建菜单栏
+        self._setup_menu()
+
+    def _setup_menu(self):
+        """设置菜单栏"""
+        menubar = self.menuBar()
+
+        # 设置菜单
+        settings_menu = menubar.addMenu("设置")
+
+        # 服务器配置
+        server_action = QAction("服务器配置", self)
+        server_action.triggered.connect(self._open_server_config)
+        settings_menu.addAction(server_action)
+
+        # 代理配置
+        proxy_action = QAction("代理配置", self)
+        proxy_action.triggered.connect(self._open_proxy_config)
+        settings_menu.addAction(proxy_action)
+
     def _toggle_theme(self, checked):
         """切换主题"""
         if checked:
@@ -104,6 +127,18 @@ class MainWindow(QMainWindow):
             self.theme_manager = ThemeManager(dark_mode=False)
         if self.app:
             self.theme_manager.apply_theme(self.app)
+
+    def _open_server_config(self):
+        """打开服务器配置对话框"""
+        dialog = ServerConfigDialog(parent=self, database=self.db)
+        dialog.exec()
+
+    def _open_proxy_config(self):
+        """打开代理配置对话框"""
+        dialog = ProxyDialog(self.db, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            settings = dialog.get_proxy_settings()
+            self.log_panel.append_info(f"代理设置已更新: {settings}")
 
     def _setup_backend(self):
         """初始化后端组件"""

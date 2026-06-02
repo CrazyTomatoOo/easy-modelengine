@@ -363,7 +363,18 @@ class Database:
         
         return [dict(row) for row in rows]
     
+    def delete_server_config(self, config_id: int) -> bool:
+        """删除服务器配置。"""
+        conn = self._get_connection()
+        cursor = conn.execute(
+            'DELETE FROM server_configs WHERE id = ?',
+            (config_id,)
+        )
+        conn.commit()
+        
+        return cursor.rowcount > 0
     def set_setting(self, key: str, value: str):
+
         """Set an application setting."""
         conn = self._get_connection()
         conn.execute('''
