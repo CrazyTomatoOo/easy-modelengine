@@ -37,6 +37,7 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_backend()
         self._connect_signals()
+        self.log_panel.append_info("应用已启动")
 
     def _setup_ui(self):
         # 创建中心部件
@@ -122,23 +123,47 @@ class MainWindow(QMainWindow):
         if checked:
             self.theme_btn.setText("☀️ 浅色模式")
             self.theme_manager = ThemeManager(dark_mode=True)
+            self.log_panel.append_info("切换到深色模式")
         else:
             self.theme_btn.setText("🌙 深色模式")
             self.theme_manager = ThemeManager(dark_mode=False)
+            self.log_panel.append_info("切换到浅色模式")
         if self.app:
             self.theme_manager.apply_theme(self.app)
 
     def _open_server_config(self):
         """打开服务器配置对话框"""
+        self.log_panel.append_info("打开服务器配置对话框")
         dialog = ServerConfigDialog(parent=self, database=self.db)
-        dialog.exec()
+        result = dialog.exec()
+        if result == QDialog.DialogCode.Accepted:
+            self.log_panel.append_success("服务器配置已保存")
+        else:
+            self.log_panel.append_info("服务器配置已取消")
 
     def _open_proxy_config(self):
         """打开代理配置对话框"""
+        self.log_panel.append_info("打开代理配置对话框")
         dialog = ProxyDialog(self.db, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             settings = dialog.get_proxy_settings()
-            self.log_panel.append_info(f"代理设置已更新: {settings}")
+            enable = settings.get("enable_proxy", False)
+            http = settings.get("proxy_http", "")
+            https = settings.get("proxy_https", "")
+            hf_mirror = settings.get("mirror_hf", "")
+            ms_mirror = settings.get("mirror_ms", "")
+            
+            self.log_panel.append_success("代理设置已保存")
+            if enable:
+                self.log_panel.append_info(f"代理已启用 - HTTP: {http or '未设置'}, HTTPS: {https or '未设置'}")
+            else:
+                self.log_panel.append_info("代理已禁用")
+            if hf_mirror:
+                self.log_panel.append_info(f"HuggingFace 镜像: {hf_mirror}")
+            if ms_mirror:
+                self.log_panel.append_info(f"ModelScope 镜像: {ms_mirror}")
+        else:
+            self.log_panel.append_info("代理配置已取消")
 
     def _setup_backend(self):
         """初始化后端组件"""
@@ -165,6 +190,13 @@ class MainWindow(QMainWindow):
 
         # WizardPanel 任务创建信号
         self.wizard_panel.task_created.connect(self._on_task_created)
+        self.wizard_panel.log_signal.connect(self._on_wizard_log)
+
+        # TaskPanel 信号
+        self.task_panel.pause_task.connect(self._on_pause_task)
+        self.task_panel.resume_task.connect(self._on_resume_task)
+        self.task_panel.cancel_task.connect(self._on_cancel_task)
+        self.wizard_panel.task_created.connect(self._on_task_created)
 
         # TaskPanel 信号
         self.task_panel.pause_task.connect(self._on_pause_task)
@@ -186,6 +218,7 @@ class MainWindow(QMainWindow):
         }
         status_text = state_map.get(state, state)
         self.task_panel.update_task_status(task_id, status_text)
+        self.log_panel.append_info(f"任务 {task_id[:8]}... 状态变更为: {status_text}")
 
     def _on_task_progress(self, task_id: str, file_path: str, current: int, total: int):
         """处理任务进度更新"""
@@ -231,6 +264,8 @@ class MainWindow(QMainWindow):
             model_id = task_data.get("model_id", "")
             revision = task_data.get("version", "main")
 
+            self.log_panel.append_info(f"正在创建任务 - 模型: {model_id}, 版本: {revision}, 来源: {model_source}")
+
             if model_id and task_type != TaskType.TRANSFER_ONLY:
                 try:
                     if model_source == "huggingface":
@@ -246,6 +281,7 @@ class MainWindow(QMainWindow):
                         )
                         for f in files
                     ]
+                    self.log_panel.append_info(f"获取到 {len(files)} 个文件")
                 except Exception as e:
                     self.log_panel.append_error(f"获取文件列表失败: {str(e)}")
 
@@ -266,7 +302,7 @@ class MainWindow(QMainWindow):
             # 创建任务
             task_id = self.task_manager.create_task(config)
             self.task_panel.add_task(task_id, model_id or "未知模型")
-            self.log_panel.append_info(f"任务已创建: {task_id[:8]}...")
+            self.log_panel.append_success(f"任务已创建: {task_id[:8]}...")
 
         except Exception as e:
             self.log_panel.append_error(f"创建任务失败: {str(e)}")
@@ -284,7 +320,19 @@ class MainWindow(QMainWindow):
         """取消任务"""
         self.log_panel.append_info(f"取消任务: {task_id[:8]}...")
 
+    def _on_wizard_log(self, message: str, level: str):
+        """处理向导面板的日志信号"""
+        level = level.upper()
+        if level == "ERROR":
+            self.log_panel.append_error(message)
+        elif level == "WARNING":
+            self.log_panel.append_warning(message)
+        elif level == "SUCCESS":
+            self.log_panel.append_success(message)
+        else:
+            self.log_panel.append_info(message)
     def closeEvent(self, event):
         """关闭事件处理"""
+        self.log_panel.append_info("应用即将关闭")
         self.db.close()
         event.accept()

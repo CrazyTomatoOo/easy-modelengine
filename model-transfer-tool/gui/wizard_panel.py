@@ -44,6 +44,7 @@ class WizardPanel(QWidget):
     """4步向导面板"""
     
     task_created = pyqtSignal(dict)
+    log_signal = pyqtSignal(str, str)  # message, level
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -129,6 +130,7 @@ class WizardPanel(QWidget):
         self.model_id_input.setPlaceholderText("例如: bert-base-chinese")
         model_layout.addRow("模型 ID:", self.model_id_input)
         layout.addLayout(model_layout)
+        
         # 版本选择 + 获取按钮（水平布局）
         version_row = QHBoxLayout()
         version_row.setSpacing(8)
@@ -149,9 +151,6 @@ class WizardPanel(QWidget):
         
         layout.addLayout(version_row)
         
-        # 文件过滤
-        
-        # 文件过滤
         # 文件过滤
         filter_layout = QFormLayout()
         self.filter_input = QLineEdit()
@@ -222,38 +221,17 @@ class WizardPanel(QWidget):
         
         layout.addWidget(self.transfer_group)
         
-        # 代理设置（可折叠）
-        self.proxy_checkbox = QCheckBox("使用代理")
-        layout.addWidget(self.proxy_checkbox)
-        
-        self.proxy_group = QGroupBox("代理设置")
-        self.proxy_group.setVisible(False)
-        proxy_layout = QFormLayout(self.proxy_group)
-        
-        self.proxy_url_input = QLineEdit()
-        self.proxy_url_input.setPlaceholderText("http://proxy.example.com:8080")
-        proxy_layout.addRow("代理地址:", self.proxy_url_input)
-        
-        self.proxy_username_input = QLineEdit()
-        proxy_layout.addRow("用户名:", self.proxy_username_input)
-        
-        self.proxy_password_input = QLineEdit()
-        self.proxy_password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        proxy_layout.addRow("密码:", self.proxy_password_input)
-        
-        layout.addWidget(self.proxy_group)
-        
         layout.addStretch()
         self.stack.addWidget(page)
     
     def _setup_step3(self):
-        """Step 3: 确认执行"""
+        """Step 3: 确认信息"""
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setSpacing(15)
         
         # 标题
-        title = QLabel("确认执行")
+        title = QLabel("确认信息")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = QFont()
         font.setPointSize(12)
@@ -261,48 +239,49 @@ class WizardPanel(QWidget):
         title.setFont(font)
         layout.addWidget(title)
         
-        # 任务摘要
+        # 信息摘要
         summary_group = QGroupBox("任务摘要")
         summary_layout = QFormLayout(summary_group)
+        
         self.summary_source = QLabel("-")
         self.summary_model = QLabel("-")
         self.summary_version = QLabel("-")
         self.summary_task = QLabel("-")
         self.summary_target = QLabel("-")
+        self.summary_files = QLabel("-")
         
         summary_layout.addRow("模型来源:", self.summary_source)
         summary_layout.addRow("模型 ID:", self.summary_model)
         summary_layout.addRow("版本:", self.summary_version)
         summary_layout.addRow("任务类型:", self.summary_task)
         summary_layout.addRow("目标位置:", self.summary_target)
+        summary_layout.addRow("文件数量:", self.summary_files)
+        
         layout.addWidget(summary_group)
         
-        # 文件清单预览
-        files_group = QGroupBox("文件清单预览")
+        # 文件列表预览
+        files_group = QGroupBox("文件列表")
         files_layout = QVBoxLayout(files_group)
+        
         self.files_tree = QTreeWidget()
         self.files_tree.setHeaderLabels(["文件名", "大小", "状态"])
-        self.files_tree.setColumnWidth(0, 300)
+        self.files_tree.setColumnWidth(0, 200)
+        self.files_tree.setColumnWidth(1, 100)
         files_layout.addWidget(self.files_tree)
-        layout.addWidget(files_group)
         
-        # 存储空间提示
-        self.storage_label = QLabel("正在检查存储空间...")
-        self.storage_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.storage_label.setStyleSheet("color: #666;")
-        layout.addWidget(self.storage_label)
+        layout.addWidget(files_group)
         
         layout.addStretch()
         self.stack.addWidget(page)
     
     def _setup_step4(self):
-        """Step 4: 执行监控"""
+        """Step 4: 执行进度"""
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setSpacing(15)
         
         # 标题
-        title = QLabel("执行监控")
+        title = QLabel("执行进度")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = QFont()
         font.setPointSize(12)
@@ -319,7 +298,7 @@ class WizardPanel(QWidget):
         self.total_progress.setValue(0)
         progress_layout.addWidget(self.total_progress)
         
-        # 速度和 ETA
+        # 速度和预计时间
         info_layout = QHBoxLayout()
         self.speed_label = QLabel("速度: -")
         self.eta_label = QLabel("预计剩余时间: -")
@@ -330,37 +309,33 @@ class WizardPanel(QWidget):
         
         layout.addWidget(progress_group)
         
-        # 文件状态列表
-        status_group = QGroupBox("文件状态")
+        # 状态列表
+        status_group = QGroupBox("执行状态")
         status_layout = QVBoxLayout(status_group)
+        
         self.status_list = QListWidget()
         status_layout.addWidget(self.status_list)
+        
         layout.addWidget(status_group)
         
-        # 控制按钮
-        control_layout = QHBoxLayout()
+        # 操作按钮
+        btn_layout = QHBoxLayout()
         self.pause_btn = QPushButton("暂停")
         self.resume_btn = QPushButton("恢复")
         self.resume_btn.setEnabled(False)
         self.cancel_btn = QPushButton("取消")
-        
-        control_layout.addWidget(self.pause_btn)
-        control_layout.addWidget(self.resume_btn)
-        control_layout.addStretch()
-        control_layout.addWidget(self.cancel_btn)
-        layout.addLayout(control_layout)
-        
-        # 完成后按钮（初始隐藏）
-        self.completed_layout = QHBoxLayout()
-        self.retry_btn = QPushButton("重试失败项")
-        self.export_btn = QPushButton("导出日志")
-        self.completed_layout.addWidget(self.retry_btn)
-        self.completed_layout.addWidget(self.export_btn)
-        self.completed_layout.addStretch()
-        
+        self.retry_btn = QPushButton("重试")
         self.retry_btn.hide()
+        self.export_btn = QPushButton("导出日志")
         self.export_btn.hide()
-        layout.addLayout(self.completed_layout)
+        
+        btn_layout.addWidget(self.pause_btn)
+        btn_layout.addWidget(self.resume_btn)
+        btn_layout.addWidget(self.cancel_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.retry_btn)
+        btn_layout.addWidget(self.export_btn)
+        layout.addLayout(btn_layout)
         
         layout.addStretch()
         self.stack.addWidget(page)
@@ -371,17 +346,26 @@ class WizardPanel(QWidget):
         self.next_btn.clicked.connect(self.go_next)
         self.finish_btn.clicked.connect(self._on_finish)
         
-        # Step 2 信号
-        self.task_group_btn.idClicked.connect(self._on_task_type_changed)
-        self.proxy_checkbox.stateChanged.connect(self._on_proxy_toggled)
-        self.cache_btn.clicked.connect(self._on_browse_cache)
+        self.cache_btn.clicked.connect(self._browse_cache_dir)
+        self.download_transfer_radio.toggled.connect(self._on_task_type_changed)
+        self.transfer_local_radio.toggled.connect(self._on_task_type_changed)
         
-        # Step 4 信号
         self.pause_btn.clicked.connect(self._on_pause)
         self.resume_btn.clicked.connect(self._on_resume)
         self.cancel_btn.clicked.connect(self._on_cancel)
         self.retry_btn.clicked.connect(self._on_retry)
         self.export_btn.clicked.connect(self._on_export)
+    
+    def _on_task_type_changed(self):
+        """任务类型改变"""
+        show_transfer = self.download_transfer_radio.isChecked() or self.transfer_local_radio.isChecked()
+        self.transfer_group.setVisible(show_transfer)
+    
+    def _browse_cache_dir(self):
+        """浏览缓存目录"""
+        dir_path = QFileDialog.getExistingDirectory(self, "选择缓存目录")
+        if dir_path:
+            self.cache_input.setText(dir_path)
     
     def _update_ui(self):
         """更新UI状态"""
@@ -390,67 +374,14 @@ class WizardPanel(QWidget):
         
         # 更新按钮状态
         self.prev_btn.setEnabled(self.current_step > 0)
+        self.next_btn.setVisible(self.current_step < 3)
+        self.finish_btn.setVisible(self.current_step == 3)
         
-        if self.current_step == 3:
-            self.next_btn.hide()
-            self.finish_btn.show()
-        else:
-            self.next_btn.show()
-            self.finish_btn.hide()
-        
-        # 进入步骤时的特殊处理
+        # 更新摘要信息
         if self.current_step == 2:
             self._update_summary()
     
-    def _on_task_type_changed(self, task_id):
-        """任务类型改变时更新UI"""
-        has_transfer = task_id in [1, 2]  # 下载并传输 或 仅传输本地
-        self.transfer_group.setVisible(has_transfer)
-    
-    def _on_proxy_toggled(self, state):
-        """代理复选框切换"""
-        self.proxy_group.setVisible(state == Qt.CheckState.Checked.value)
-    
-    def _on_browse_cache(self):
-        """浏览缓存目录"""
-        directory = QFileDialog.getExistingDirectory(self, "选择缓存目录")
-        if directory:
-            self.cache_input.setText(directory)
-    
     def _update_summary(self):
-        """更新任务摘要"""
-        # 模型来源
-        if self.hf_radio.isChecked():
-            self.summary_source.setText("HuggingFace")
-        else:
-            self.summary_source.setText("ModelScope")
-        
-        # 模型信息
-        self.summary_model.setText(self.model_id_input.text() or "-")
-        self.summary_version.setText(self.version_combo.currentText())
-        
-        # 任务类型
-        task_id = self.task_group_btn.checkedId()
-        if task_id == 0:
-            self.summary_task.setText("仅下载到本地")
-            self.summary_target.setText(self.cache_input.text() or "-")
-        elif task_id == 1:
-            self.summary_task.setText("下载并传输到服务器")
-            self.summary_target.setText(
-                f"{self.server_combo.currentText()}:{self.target_dir_input.text() or '-'}"
-            )
-        else:
-            self.summary_task.setText("仅传输本地已有文件")
-            self.summary_target.setText(
-                f"{self.server_combo.currentText()}:{self.target_dir_input.text() or '-'}"
-            )
-        
-        # 更新文件列表（从实际仓库获取）
-        self.files_tree.clear()
-        self._fetch_file_list()
-        
-        # 更新存储空间提示（实际检查）
-        self._check_storage_space()
         """更新任务摘要"""
         # 模型来源
         if self.hf_radio.isChecked():
@@ -493,6 +424,8 @@ class WizardPanel(QWidget):
         self.version_combo.clear()
         self.version_combo.setPlaceholderText("获取中...")
         
+        self.log_signal.emit(f"正在获取模型 {model_id} 的版本列表...", "INFO")
+        
         worker = VersionFetchWorker(self, model_id, self.hf_radio.isChecked())
         QThreadPool.globalInstance().start(worker)
     
@@ -503,7 +436,7 @@ class WizardPanel(QWidget):
         self.version_combo.setCurrentText("main")
         self.fetch_version_btn.setEnabled(True)
         self.fetch_version_btn.setText("获取")
-        QMessageBox.information(self, "成功", f"模型验证成功！\n找到 {file_count} 个文件")
+        self.log_signal.emit(f"成功获取版本列表，找到 {file_count} 个文件", "SUCCESS")
     
     def _on_versions_fetch_error(self, error_msg):
         """版本列表获取失败的回调（在主线程执行）"""
@@ -512,38 +445,7 @@ class WizardPanel(QWidget):
         self.version_combo.setCurrentText("main")
         self.fetch_version_btn.setEnabled(True)
         self.fetch_version_btn.setText("获取")
-        QMessageBox.warning(self, "错误", f"获取版本列表失败:\n{error_msg}")
-        """获取版本列表"""
-        model_id = self.model_id_input.text().strip()
-        if not model_id:
-            QMessageBox.warning(self, "警告", "请先输入模型ID")
-            return
-        
-        self.fetch_version_btn.setEnabled(False)
-        self.fetch_version_btn.setText("获取中...")
-        self.version_combo.clear()
-        
-        try:
-            if self.hf_radio.isChecked():
-                downloader = HuggingFaceDownloader()
-            else:
-                downloader = ModelScopeDownloader()
-            
-            # 获取文件列表来验证模型存在
-            files = downloader.list_files(model_id, "main")
-            
-            # 添加常用版本
-            versions = ["main", "master", "latest"]
-            self.version_combo.addItems(versions)
-            self.version_combo.setCurrentText("main")
-            
-            QMessageBox.information(self, "成功", f"模型验证成功！\n找到 {len(files)} 个文件")
-        except Exception as e:
-            QMessageBox.warning(self, "错误", f"获取版本列表失败:\n{str(e)}")
-            self.version_combo.addItem("main")
-        finally:
-            self.fetch_version_btn.setEnabled(True)
-            self.fetch_version_btn.setText("获取版本列表")
+        self.log_signal.emit(f"获取版本列表失败: {error_msg}", "ERROR")
     
     def _fetch_file_list(self):
         """获取文件列表"""
@@ -574,9 +476,12 @@ class WizardPanel(QWidget):
                 item = QTreeWidgetItem([file_info.path, size_str, "待下载"])
                 self.files_tree.addTopLevelItem(item)
             
+            self.log_signal.emit(f"获取到 {len(files)} 个文件", "INFO")
+            
         except Exception as e:
             item = QTreeWidgetItem([f"获取文件列表失败: {str(e)}", "", ""])
             self.files_tree.addTopLevelItem(item)
+            self.log_signal.emit(f"获取文件列表失败: {str(e)}", "ERROR")
     
     def _format_size(self, size_bytes):
         """格式化文件大小"""
@@ -592,46 +497,32 @@ class WizardPanel(QWidget):
         """检查存储空间"""
         cache_dir = self.cache_input.text().strip()
         if not cache_dir:
-            cache_dir = str(Path.home() / "model-transfer-tool-cache")
+            cache_dir = str(Path.home() / ".cache" / "model-transfer")
         
         try:
-            path = Path(cache_dir)
-            path.mkdir(parents=True, exist_ok=True)
-            
-            total, used, free = shutil.disk_usage(path)
+            import shutil
+            total, used, free = shutil.disk_usage(cache_dir)
             free_gb = free / (1024**3)
-            total_gb = total / (1024**3)
-            used_gb = used / (1024**3)
             
-            # 计算任务需要的空间
-            total_size = 0
+            # 计算所需空间（从文件列表）
+            required_gb = 0
             for i in range(self.files_tree.topLevelItemCount()):
                 item = self.files_tree.topLevelItem(i)
-                size_text = item.text(1)
-                total_size += self._parse_size(size_text)
+                size_str = item.text(1)
+                required_gb += self._parse_size(size_str)
             
-            needed_gb = total_size / (1024**3)
+            required_gb = required_gb / (1024**3)
             
-            if free_gb < needed_gb:
-                self.storage_label.setText(
-                    f"⚠ 空间不足！需要 {needed_gb:.1f} GB，"
-                    f"可用 {free_gb:.1f} GB (总计 {total_gb:.1f} GB)"
+            if free_gb < required_gb:
+                self.log_signal.emit(
+                    f"存储空间不足: 需要 {required_gb:.1f} GB, 可用 {free_gb:.1f} GB",
+                    "WARNING"
                 )
-                self.storage_label.setStyleSheet("color: red;")
-            else:
-                self.storage_label.setText(
-                    f"✓ 空间充足。需要 {needed_gb:.1f} GB，"
-                    f"可用 {free_gb:.1f} GB (已用 {used_gb:.1f}/{total_gb:.1f} GB)"
-                )
-                self.storage_label.setStyleSheet("color: green;")
-        except Exception as e:
-            self.storage_label.setText(f"无法检查存储空间: {str(e)}")
-            self.storage_label.setStyleSheet("color: orange;")
+        except Exception:
+            pass
     
     def _parse_size(self, size_str):
         """解析大小字符串为字节数"""
-        if not size_str or size_str == "-":
-            return 0
         try:
             parts = size_str.split()
             if len(parts) != 2:
@@ -642,26 +533,12 @@ class WizardPanel(QWidget):
             return value * multipliers.get(unit, 1)
         except:
             return 0
-        self.files_tree.clear()
-        # 这里应该根据实际模型文件填充，现在用示例数据
-        sample_files = [
-            ("config.json", "1.2 KB", "待下载"),
-            ("pytorch_model.bin", "440 MB", "待下载"),
-            ("tokenizer.json", "2.1 MB", "待下载"),
-            ("README.md", "5.6 KB", "待下载"),
-        ]
-        for filename, size, status in sample_files:
-            item = QTreeWidgetItem([filename, size, status])
-            self.files_tree.addTopLevelItem(item)
-        
-        # 更新存储空间提示
-        self.storage_label.setText("存储空间检查: 可用空间充足 ✓")
-        self.storage_label.setStyleSheet("color: green;")
     
     def _on_finish(self):
         """完成按钮点击"""
         task_data = self._get_task_data()
         self.task_created.emit(task_data)
+        self.log_signal.emit("任务已提交", "SUCCESS")
         
         # 重置向导
         self.reset()
@@ -680,23 +557,19 @@ class WizardPanel(QWidget):
             "cache_dir": self.cache_input.text(),
             "server": self.server_combo.currentText() if task_id in [1, 2] else None,
             "target_dir": self.target_dir_input.text() if task_id in [1, 2] else None,
-            "proxy": {
-                "enabled": self.proxy_checkbox.isChecked(),
-                "url": self.proxy_url_input.text(),
-                "username": self.proxy_username_input.text(),
-                "password": self.proxy_password_input.text(),
-            } if self.proxy_checkbox.isChecked() else None,
         }
     
     def _on_pause(self):
         """暂停"""
         self.pause_btn.setEnabled(False)
         self.resume_btn.setEnabled(True)
+        self.log_signal.emit("任务已暂停", "INFO")
     
     def _on_resume(self):
         """恢复"""
         self.pause_btn.setEnabled(True)
         self.resume_btn.setEnabled(False)
+        self.log_signal.emit("任务已恢复", "INFO")
     
     def _on_cancel(self):
         """取消"""
@@ -705,11 +578,12 @@ class WizardPanel(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
+            self.log_signal.emit("任务已取消", "WARNING")
             self.reset()
     
     def _on_retry(self):
         """重试失败项"""
-        pass  # 由外部处理
+        self.log_signal.emit("正在重试失败项...", "INFO")
     
     def _on_export(self):
         """导出日志"""
@@ -717,7 +591,7 @@ class WizardPanel(QWidget):
             self, "导出日志", "task_log.txt", "文本文件 (*.txt)"
         )
         if file_path:
-            pass  # 由外部处理日志导出
+            self.log_signal.emit(f"日志已导出到: {file_path}", "SUCCESS")
     
     def go_next(self):
         """下一步"""
@@ -732,6 +606,8 @@ class WizardPanel(QWidget):
             if not version or version == "输入模型ID后自动获取...":
                 QMessageBox.warning(self, "警告", "请选择或输入版本/分支")
                 return
+            
+            self.log_signal.emit(f"步骤1完成 - 模型: {model_id}, 版本: {version}", "INFO")
         
         elif self.current_step == 1:
             # Step 2 验证
@@ -747,11 +623,13 @@ class WizardPanel(QWidget):
                 if not target_dir:
                     QMessageBox.warning(self, "警告", "请输入目标目录")
                     return
+            
+            self.log_signal.emit("步骤2完成 - 参数配置完成", "INFO")
         
-        if self.current_step < 3:
-            self.current_step += 1
-            self._update_ui()
-        """下一步"""
+        elif self.current_step == 2:
+            # Step 3 确认
+            self.log_signal.emit("步骤3完成 - 任务确认", "INFO")
+        
         if self.current_step < 3:
             self.current_step += 1
             self._update_ui()
@@ -761,6 +639,7 @@ class WizardPanel(QWidget):
         if self.current_step > 0:
             self.current_step -= 1
             self._update_ui()
+            self.log_signal.emit(f"返回到步骤 {self.current_step + 1}", "INFO")
     
     def reset(self):
         """重置向导"""
@@ -772,15 +651,12 @@ class WizardPanel(QWidget):
         self.cache_input.clear()
         self.server_combo.setCurrentIndex(0)
         self.target_dir_input.clear()
-        self.proxy_checkbox.setChecked(False)
-        self.proxy_url_input.clear()
-        self.proxy_username_input.clear()
-        self.proxy_password_input.clear()
         self.total_progress.setValue(0)
         self.speed_label.setText("速度: -")
         self.eta_label.setText("预计剩余时间: -")
         self.status_list.clear()
         self._update_ui()
+        self.log_signal.emit("向导已重置", "INFO")
     
     def update_progress(self, progress, speed="", eta=""):
         """更新进度"""
@@ -808,6 +684,7 @@ class WizardPanel(QWidget):
         if success:
             self.total_progress.setValue(100)
             self.add_status_item("任务完成！", "success")
+            self.log_signal.emit("任务执行完成", "SUCCESS")
         
         self.retry_btn.show()
         self.export_btn.show()

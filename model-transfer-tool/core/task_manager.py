@@ -102,6 +102,21 @@ class TaskManager(QObject):
             self._download_pool.start(runnable)
 
     def _create_downloader(self, model_source: str):
+        """根据模型源创建下载器，自动应用代理设置"""
+        # 从数据库读取代理设置
+        proxy = None
+        enable_proxy = self._db.get_setting("enable_proxy", "false")
+        if enable_proxy.lower() == "true":
+            http_proxy = self._db.get_setting("proxy_http", "")
+            https_proxy = self._db.get_setting("proxy_https", "")
+            proxy = https_proxy or http_proxy or None
+        
+        if model_source == "huggingface":
+            return HuggingFaceDownloader(proxy=proxy)
+        elif model_source == "modelscope":
+            return ModelScopeDownloader()
+        else:
+            raise ValueError(f"不支持的模型源: {model_source}")
         """根据模型源创建下载器"""
         if model_source == "huggingface":
             return HuggingFaceDownloader()
