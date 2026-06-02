@@ -128,3 +128,7 @@ class LogPanel(QWidget):
         # QTextEdit 的 ensureCursorVisible 已经实现了自动滚动
         # 此方法保留以便外部控制
         pass
+
+    def append_success(self, message):
+        """追加成功日志"""
+        self.append_log(message, "INFO")

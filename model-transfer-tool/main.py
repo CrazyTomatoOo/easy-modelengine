@@ -38,16 +38,13 @@ def main() -> int:
     except Exception as e:
         print(f"主题加载失败: {e}")
     
+    # 创建主窗口
     try:
         window = MainWindow(app=app)
-    except Exception:
-        window = QWidget()
-        window.setWindowTitle("模型下载与远程传输工具")
-        window.resize(800, 600)
-    
-    try:
-        window = MainWindow()
-    except Exception:
+    except Exception as e:
+        print(f"窗口创建失败: {e}")
+        import traceback
+        traceback.print_exc()
         window = QWidget()
         window.setWindowTitle("模型下载与远程传输工具")
         window.resize(800, 600)

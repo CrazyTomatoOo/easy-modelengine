@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 import shutil
 from pathlib import Path
-
+from PyQt6.QtGui import QFont
 from core.downloaders.hf_downloader import HuggingFaceDownloader
 from core.downloaders.ms_downloader import ModelScopeDownloader
 

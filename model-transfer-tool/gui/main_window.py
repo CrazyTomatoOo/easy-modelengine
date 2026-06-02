@@ -19,6 +19,7 @@ from core.downloaders.hf_downloader import HuggingFaceDownloader
 from core.downloaders.ms_downloader import ModelScopeDownloader
 from gui.wizard_panel import WizardPanel
 from gui.task_panel import TaskPanel
+from gui.log_panel import LogPanel
 from gui.theme import ThemeManager
 
 
@@ -33,28 +34,8 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_backend()
         self._connect_signals()
-        super().__init__(parent)
-        self.setWindowTitle("模型下载与传输工具")
-        self.setMinimumSize(1200, 800)
-        self._setup_ui()
-        self._setup_backend()
-        self._connect_signals()
 
     def _setup_ui(self):
-        # 应用主题
-        if self.app:
-            self.theme_manager = ThemeManager(dark_mode=False)
-            self.theme_manager.apply_theme(self.app)
-        
-        # 创建中心部件
-        central = QWidget()
-        # 应用主题
-        self.theme_manager = ThemeManager(dark_mode=False)
-        if self.parent():
-            self.theme_manager.apply_theme(self.parent().app)
-        
-        # 创建中心部件
-        central = QWidget()
         # 创建中心部件
         central = QWidget()
         self.setCentralWidget(central)
@@ -90,14 +71,6 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("就绪")
 
     def _setup_backend(self):
-        """初始化后端组件"""
-        db_path = Path.home() / ".model_transfer_tool" / "tasks.db"
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        self.db = Database(str(db_path))
-        self.db.init_schema()
-
-        self.task_manager = TaskManager(self.db)
         """初始化后端组件"""
         db_path = Path(__file__).parent.parent / "data" / "tasks.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
