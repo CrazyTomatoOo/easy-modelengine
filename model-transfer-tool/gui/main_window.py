@@ -49,6 +49,7 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # 左侧面板 - WizardPanel (500px)
+        self.wizard_panel = WizardPanel(database=self.db)
         self.wizard_panel = WizardPanel()
         self.wizard_panel.setMinimumWidth(300)
         splitter.addWidget(self.wizard_panel)
