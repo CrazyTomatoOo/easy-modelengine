@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QSplitter, QStatusBar,
-    QMessageBox
+    QMessageBox, QPushButton
 )
 from PyQt6.QtCore import Qt
 
@@ -69,6 +69,41 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("就绪")
+
+        # 主题切换按钮
+        self.theme_btn = QPushButton("🌙 深色模式")
+        self.theme_btn.setCheckable(True)
+        self.theme_btn.setChecked(False)
+        self.theme_btn.setStyleSheet("""
+            QPushButton {
+                border: none;
+                padding: 4px 8px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #e0e0e0;
+            }
+            QPushButton:checked {
+                background-color: #2196F3;
+                color: white;
+            }
+            QPushButton:checked:hover {
+                background-color: #1976D2;
+            }
+        """)
+        self.theme_btn.toggled.connect(self._toggle_theme)
+        self.status_bar.addPermanentWidget(self.theme_btn)
+
+    def _toggle_theme(self, checked):
+        """切换主题"""
+        if checked:
+            self.theme_btn.setText("☀️ 浅色模式")
+            self.theme_manager = ThemeManager(dark_mode=True)
+        else:
+            self.theme_btn.setText("🌙 深色模式")
+            self.theme_manager = ThemeManager(dark_mode=False)
+        if self.app:
+            self.theme_manager.apply_theme(self.app)
 
     def _setup_backend(self):
         """初始化后端组件"""
