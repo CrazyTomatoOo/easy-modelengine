@@ -64,6 +64,13 @@ def task_manager(temp_db):
     
     yield manager
     
+    # Clear task tracking state to prevent signal processing during cleanup
+    manager._task_file_total.clear()
+    manager._task_file_completed.clear()
+    manager._task_file_failed.clear()
+    manager._active_download_workers.clear()
+    manager._active_transfer_workers.clear()
+    
     # Wait for all thread pools to finish
     manager._download_pool.waitForDone(5000)
     manager._verify_pool.waitForDone(5000)
@@ -174,7 +181,9 @@ class TestTaskExecution:
         spy = QSignalSpy(task_manager.task_progress)
         task_manager._execute_download_stage(task_id)
         
-        qtbot.wait(500)
+        # Wait for all workers to complete before assertions
+        task_manager._download_pool.waitForDone(5000)
+        qtbot.wait(100)
         assert len(spy) >= 2
     
     def test_execute_transfer_stage_updates_state(self, task_manager):
