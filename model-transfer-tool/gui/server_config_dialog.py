@@ -368,27 +368,119 @@ class ServerConfigDialog(QDialog):
         self.config_list = QListWidget()
         self.config_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.config_list.itemDoubleClicked.connect(self._on_edit)
+        self.config_list.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 5px;
+            }
+            QListWidget::item {
+                padding: 10px;
+                margin: 2px 0px;
+                border-radius: 4px;
+            }
+            QListWidget::item:selected {
+                background-color: #2196F3;
+                color: white;
+            }
+            QListWidget::item:hover:!selected {
+                background-color: #e3f2fd;
+            }
+        """)
         layout.addWidget(self.config_list)
         
-        # 按钮区域
+        # 按钮区域 - 使用网格布局更清晰
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
         
-        self.add_btn = QPushButton("添加")
+        self.add_btn = QPushButton("➕ 添加")
+        self.add_btn.setToolTip("添加新的服务器配置")
         self.add_btn.clicked.connect(self._on_add)
+        self.add_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px;
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:pressed {
+                background-color: #3d8b40;
+            }
+        """)
         
-        self.edit_btn = QPushButton("编辑")
+        self.edit_btn = QPushButton("✏️ 编辑")
+        self.edit_btn.setToolTip("编辑选中的服务器配置")
         self.edit_btn.clicked.connect(self._on_edit)
         self.edit_btn.setEnabled(False)
+        self.edit_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px;
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #0d47a1;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+            }
+        """)
         
-        self.delete_btn = QPushButton("删除")
-        self.delete_btn.setObjectName("secondary")
+        self.delete_btn = QPushButton("🗑️ 删除")
+        self.delete_btn.setToolTip("删除选中的服务器配置")
         self.delete_btn.clicked.connect(self._on_delete)
         self.delete_btn.setEnabled(False)
+        self.delete_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px;
+                background-color: #f44336;
+                color: white;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #da190b;
+            }
+            QPushButton:pressed {
+                background-color: #b71c1c;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+            }
+        """)
         
-        self.test_btn = QPushButton("测试连接")
-        self.test_btn.setObjectName("secondary")
+        self.test_btn = QPushButton("🔌 测试连接")
+        self.test_btn.setToolTip("测试选中服务器的连接")
         self.test_btn.clicked.connect(self._on_test_connection)
         self.test_btn.setEnabled(False)
+        self.test_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px;
+                background-color: #FF9800;
+                color: white;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+            QPushButton:pressed {
+                background-color: #E65100;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+            }
+        """)
         
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.edit_btn)
@@ -405,6 +497,21 @@ class ServerConfigDialog(QDialog):
         self.close_btn = QPushButton("关闭")
         self.close_btn.setObjectName("secondary")
         self.close_btn.clicked.connect(self.accept)
+        self.close_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 24px;
+                background-color: #757575;
+                color: white;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #616161;
+            }
+            QPushButton:pressed {
+                background-color: #424242;
+            }
+        """)
         close_layout.addWidget(self.close_btn)
         
         layout.addLayout(close_layout)
@@ -427,12 +534,12 @@ class ServerConfigDialog(QDialog):
             return
         
         for config in self.configs:
-            auth_type_text = "密码" if config.get('auth_type') == 'password' else "SSH 密钥"
+            auth_type_text = "🔑 密码" if config.get('auth_type') == 'password' else "🔐 SSH 密钥"
             display_text = (
-                f"{config.get('name', '未命名')}   |   "
-                f"{config.get('host', '-')}:{config.get('port', 22)}   |   "
-                f"用户: {config.get('username', '-')}   |   "
-                f"认证: {auth_type_text}"
+                f"📡 {config.get('name', '未命名')}\n"
+                f"   {config.get('host', '-')}:{config.get('port', 22)}  |  "
+                f"👤 {config.get('username', '-')}  |  "
+                f"{auth_type_text}"
             )
             item = QListWidgetItem(display_text)
             item.setData(Qt.ItemDataRole.UserRole, config.get('id'))
@@ -561,29 +668,3 @@ class ServerConfigDialog(QDialog):
         )
         
         QMessageBox.information(self, "测试连接", info_text)
-        
-        # TODO: 实现实际的 SSH 连接测试（需要 paramiko）
-        # try:
-        #     import paramiko
-        #     client = paramiko.SSHClient()
-        #     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        #     
-        #     # 解密凭据
-        #     encrypted_auth = config.get('encrypted_auth', b'')
-        #     auth_salt = config.get('auth_salt', b'')
-        #     if encrypted_auth and auth_salt:
-        #         nonce = encrypted_auth[:12]
-        #         ciphertext = encrypted_auth[12:]
-        #         credential = SecureStorage.decrypt(ciphertext, nonce, auth_salt)
-        #         
-        #         if auth_type == 'password':
-        #             client.connect(host, port=port, username=username, password=credential, timeout=10)
-        #         else:
-        #             import io
-        #             key = paramiko.RSAKey.from_private_key(io.StringIO(credential))
-        #             client.connect(host, port=port, username=username, pkey=key, timeout=10)
-        #         
-        #         client.close()
-        #         QMessageBox.information(self, "成功", f"连接到 '{name}' 成功！")
-        # except Exception as e:
-        #     QMessageBox.critical(self, "连接失败", f"无法连接到 '{name}':\n{str(e)}")

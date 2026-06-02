@@ -227,6 +227,16 @@ class WizardPanel(QWidget):
         layout.addWidget(task_group)
         
         # 本地缓存目录
+        self.cache_widget = QWidget()
+        cache_layout = QHBoxLayout(self.cache_widget)
+        cache_layout.setContentsMargins(0, 0, 0, 0)
+        self.cache_input = QLineEdit()
+        self.cache_input.setPlaceholderText("本地缓存目录路径")
+        self.cache_btn = QPushButton("浏览...")
+        cache_layout.addWidget(QLabel("本地缓存:"))
+        cache_layout.addWidget(self.cache_input)
+        cache_layout.addWidget(self.cache_btn)
+        layout.addWidget(self.cache_widget)
         cache_layout = QHBoxLayout()
         self.cache_input = QLineEdit()
         self.cache_input.setPlaceholderText("本地缓存目录路径")
@@ -392,6 +402,51 @@ class WizardPanel(QWidget):
         self.export_btn.clicked.connect(self._on_export)
     
     def _on_source_changed(self):
+        """模型来源切换"""
+        is_local = self.local_radio.isChecked()
+        self.remote_model_widget.setVisible(not is_local)
+        self.local_model_widget.setVisible(is_local)
+        
+        if is_local:
+            self.log_signal.emit("切换到本地模型模式", "INFO")
+            # 自动选择传输任务
+            self.transfer_local_radio.setChecked(True)
+            # 禁用其他任务类型
+            self.download_only_radio.setEnabled(False)
+            self.download_transfer_radio.setEnabled(False)
+        else:
+            source = "HuggingFace" if self.hf_radio.isChecked() else "ModelScope"
+            self.log_signal.emit(f"切换到远程模型模式: {source}", "INFO")
+            # 启用所有任务类型
+            self.download_only_radio.setEnabled(True)
+            self.download_transfer_radio.setEnabled(True)
+    
+    def _on_task_type_changed(self):
+        """任务类型改变"""
+        show_transfer = self.download_transfer_radio.isChecked() or self.transfer_local_radio.isChecked()
+        self.transfer_group.setVisible(show_transfer)
+        
+        # 仅传输本地文件时，不需要缓存目录
+        show_cache = not self.transfer_local_radio.isChecked()
+        self.cache_widget.setVisible(show_cache)
+        """模型来源切换"""
+        is_local = self.local_radio.isChecked()
+        self.remote_model_widget.setVisible(not is_local)
+        self.local_model_widget.setVisible(is_local)
+        
+        if is_local:
+            self.log_signal.emit("切换到本地模型模式", "INFO")
+            # 自动选择传输任务
+            self.transfer_local_radio.setChecked(True)
+            # 禁用其他任务类型
+            self.download_only_radio.setEnabled(False)
+            self.download_transfer_radio.setEnabled(False)
+        else:
+            source = "HuggingFace" if self.hf_radio.isChecked() else "ModelScope"
+            self.log_signal.emit(f"切换到远程模型模式: {source}", "INFO")
+            # 启用所有任务类型
+            self.download_only_radio.setEnabled(True)
+            self.download_transfer_radio.setEnabled(True)
         """模型来源切换"""
         is_local = self.local_radio.isChecked()
         self.remote_model_widget.setVisible(not is_local)
