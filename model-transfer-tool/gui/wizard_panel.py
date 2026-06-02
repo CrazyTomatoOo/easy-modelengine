@@ -12,7 +12,11 @@ from PyQt6.QtWidgets import (
     QFrame, QScrollArea, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+import shutil
+from pathlib import Path
+
+from core.downloaders.hf_downloader import HuggingFaceDownloader
+from core.downloaders.ms_downloader import ModelScopeDownloader
 
 
 class WizardPanel(QWidget):
@@ -104,7 +108,18 @@ class WizardPanel(QWidget):
         self.model_id_input.setPlaceholderText("例如: bert-base-chinese")
         model_layout.addRow("模型 ID:", self.model_id_input)
         layout.addLayout(model_layout)
+        # 版本选择
+        version_layout = QFormLayout()
+        self.version_combo = QComboBox()
+        self.version_combo.setEditable(True)
+        self.version_combo.setPlaceholderText("点击右侧按钮获取版本列表")
+        version_layout.addRow("版本/分支:", self.version_combo)
+        layout.addLayout(version_layout)
         
+        # 获取版本按钮
+        self.fetch_version_btn = QPushButton("获取版本列表")
+        self.fetch_version_btn.clicked.connect(self._fetch_versions)
+        layout.addWidget(self.fetch_version_btn)
         # 版本选择
         version_layout = QFormLayout()
         self.version_combo = QComboBox()
@@ -407,7 +422,172 @@ class WizardPanel(QWidget):
                 f"{self.server_combo.currentText()}:{self.target_dir_input.text() or '-'}"
             )
         
-        # 更新文件列表（模拟）
+        # 更新文件列表（从实际仓库获取）
+        self.files_tree.clear()
+        self._fetch_file_list()
+        
+        # 更新存储空间提示（实际检查）
+        self._check_storage_space()
+        """更新任务摘要"""
+        # 模型来源
+        if self.hf_radio.isChecked():
+            self.summary_source.setText("HuggingFace")
+        else:
+            self.summary_source.setText("ModelScope")
+        
+        # 模型信息
+        self.summary_model.setText(self.model_id_input.text() or "-")
+        self.summary_version.setText(self.version_combo.currentText())
+        
+        # 任务类型
+        task_id = self.task_group_btn.checkedId()
+        if task_id == 0:
+            self.summary_task.setText("仅下载到本地")
+            self.summary_target.setText(self.cache_input.text() or "-")
+        elif task_id == 1:
+            self.summary_task.setText("下载并传输到服务器")
+            self.summary_target.setText(
+                f"{self.server_combo.currentText()}:{self.target_dir_input.text() or '-'}"
+            )
+        else:
+            self.summary_task.setText("仅传输本地已有文件")
+            self.summary_target.setText(
+                f"{self.server_combo.currentText()}:{self.target_dir_input.text() or '-'}"
+            )
+        
+        # 更新存储空间提示（实际检查）
+        self._check_storage_space()
+    
+    def _fetch_versions(self):
+        """获取版本列表"""
+        model_id = self.model_id_input.text().strip()
+        if not model_id:
+            QMessageBox.warning(self, "警告", "请先输入模型ID")
+            return
+        
+        self.fetch_version_btn.setEnabled(False)
+        self.fetch_version_btn.setText("获取中...")
+        self.version_combo.clear()
+        
+        try:
+            if self.hf_radio.isChecked():
+                downloader = HuggingFaceDownloader()
+            else:
+                downloader = ModelScopeDownloader()
+            
+            # 获取文件列表来验证模型存在
+            files = downloader.list_files(model_id, "main")
+            
+            # 添加常用版本
+            versions = ["main", "master", "latest"]
+            self.version_combo.addItems(versions)
+            self.version_combo.setCurrentText("main")
+            
+            QMessageBox.information(self, "成功", f"模型验证成功！\n找到 {len(files)} 个文件")
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"获取版本列表失败:\n{str(e)}")
+            self.version_combo.addItem("main")
+        finally:
+            self.fetch_version_btn.setEnabled(True)
+            self.fetch_version_btn.setText("获取版本列表")
+    
+    def _fetch_file_list(self):
+        """获取文件列表"""
+        model_id = self.model_id_input.text().strip()
+        version = self.version_combo.currentText()
+        
+        if not model_id or not version:
+            return
+        
+        try:
+            if self.hf_radio.isChecked():
+                downloader = HuggingFaceDownloader()
+            else:
+                downloader = ModelScopeDownloader()
+            
+            files = downloader.list_files(model_id, version)
+            
+            # 应用文件过滤
+            filter_pattern = self.filter_input.text().strip()
+            if filter_pattern:
+                import fnmatch
+                patterns = [p.strip() for p in filter_pattern.split(",")]
+                files = [f for f in files if any(fnmatch.fnmatch(f.path, p) for p in patterns)]
+            
+            # 显示文件列表
+            for file_info in files:
+                size_str = self._format_size(file_info.size)
+                item = QTreeWidgetItem([file_info.path, size_str, "待下载"])
+                self.files_tree.addTopLevelItem(item)
+            
+        except Exception as e:
+            item = QTreeWidgetItem([f"获取文件列表失败: {str(e)}", "", ""])
+            self.files_tree.addTopLevelItem(item)
+    
+    def _format_size(self, size_bytes):
+        """格式化文件大小"""
+        if size_bytes == 0:
+            return "0 B"
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if abs(size_bytes) < 1024.0:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.1f} PB"
+    
+    def _check_storage_space(self):
+        """检查存储空间"""
+        cache_dir = self.cache_input.text().strip()
+        if not cache_dir:
+            cache_dir = str(Path.home() / "model-transfer-tool-cache")
+        
+        try:
+            path = Path(cache_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            
+            total, used, free = shutil.disk_usage(path)
+            free_gb = free / (1024**3)
+            total_gb = total / (1024**3)
+            used_gb = used / (1024**3)
+            
+            # 计算任务需要的空间
+            total_size = 0
+            for i in range(self.files_tree.topLevelItemCount()):
+                item = self.files_tree.topLevelItem(i)
+                size_text = item.text(1)
+                total_size += self._parse_size(size_text)
+            
+            needed_gb = total_size / (1024**3)
+            
+            if free_gb < needed_gb:
+                self.storage_label.setText(
+                    f"⚠ 空间不足！需要 {needed_gb:.1f} GB，"
+                    f"可用 {free_gb:.1f} GB (总计 {total_gb:.1f} GB)"
+                )
+                self.storage_label.setStyleSheet("color: red;")
+            else:
+                self.storage_label.setText(
+                    f"✓ 空间充足。需要 {needed_gb:.1f} GB，"
+                    f"可用 {free_gb:.1f} GB (已用 {used_gb:.1f}/{total_gb:.1f} GB)"
+                )
+                self.storage_label.setStyleSheet("color: green;")
+        except Exception as e:
+            self.storage_label.setText(f"无法检查存储空间: {str(e)}")
+            self.storage_label.setStyleSheet("color: orange;")
+    
+    def _parse_size(self, size_str):
+        """解析大小字符串为字节数"""
+        if not size_str or size_str == "-":
+            return 0
+        try:
+            parts = size_str.split()
+            if len(parts) != 2:
+                return 0
+            value = float(parts[0])
+            unit = parts[1].upper()
+            multipliers = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+            return value * multipliers.get(unit, 1)
+        except:
+            return 0
         self.files_tree.clear()
         # 这里应该根据实际模型文件填充，现在用示例数据
         sample_files = [
@@ -486,6 +666,37 @@ class WizardPanel(QWidget):
             pass  # 由外部处理日志导出
     
     def go_next(self):
+        """下一步"""
+        if self.current_step == 0:
+            # Step 1 验证
+            model_id = self.model_id_input.text().strip()
+            if not model_id:
+                QMessageBox.warning(self, "警告", "请输入模型ID")
+                return
+            
+            version = self.version_combo.currentText()
+            if not version or version == "输入模型ID后自动获取...":
+                QMessageBox.warning(self, "警告", "请选择或输入版本/分支")
+                return
+        
+        elif self.current_step == 1:
+            # Step 2 验证
+            task_id = self.task_group_btn.checkedId()
+            cache_dir = self.cache_input.text().strip()
+            
+            if not cache_dir:
+                QMessageBox.warning(self, "警告", "请设置本地缓存目录")
+                return
+            
+            if task_id in [1, 2]:  # 需要传输
+                target_dir = self.target_dir_input.text().strip()
+                if not target_dir:
+                    QMessageBox.warning(self, "警告", "请输入目标目录")
+                    return
+        
+        if self.current_step < 3:
+            self.current_step += 1
+            self._update_ui()
         """下一步"""
         if self.current_step < 3:
             self.current_step += 1
