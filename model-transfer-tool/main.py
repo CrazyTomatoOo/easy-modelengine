@@ -30,6 +30,21 @@ def main() -> int:
     
     app = QApplication(sys.argv)
     
+    # 应用现代化主题
+    try:
+        from gui.theme import ThemeManager
+        theme_manager = ThemeManager(dark_mode=False)
+        theme_manager.apply_theme(app)
+    except Exception as e:
+        print(f"主题加载失败: {e}")
+    
+    try:
+        window = MainWindow(app=app)
+    except Exception:
+        window = QWidget()
+        window.setWindowTitle("模型下载与远程传输工具")
+        window.resize(800, 600)
+    
     try:
         window = MainWindow()
     except Exception:

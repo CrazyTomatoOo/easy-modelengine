@@ -19,13 +19,20 @@ from core.downloaders.hf_downloader import HuggingFaceDownloader
 from core.downloaders.ms_downloader import ModelScopeDownloader
 from gui.wizard_panel import WizardPanel
 from gui.task_panel import TaskPanel
-from gui.log_panel import LogPanel
+from gui.theme import ThemeManager
 
 
 class MainWindow(QMainWindow):
     """应用主窗口"""
 
-    def __init__(self, parent=None):
+    def __init__(self, app=None, parent=None):
+        super().__init__(parent)
+        self.app = app
+        self.setWindowTitle("模型下载与远程传输工具")
+        self.setMinimumSize(1200, 800)
+        self._setup_ui()
+        self._setup_backend()
+        self._connect_signals()
         super().__init__(parent)
         self.setWindowTitle("模型下载与传输工具")
         self.setMinimumSize(1200, 800)
@@ -34,6 +41,20 @@ class MainWindow(QMainWindow):
         self._connect_signals()
 
     def _setup_ui(self):
+        # 应用主题
+        if self.app:
+            self.theme_manager = ThemeManager(dark_mode=False)
+            self.theme_manager.apply_theme(self.app)
+        
+        # 创建中心部件
+        central = QWidget()
+        # 应用主题
+        self.theme_manager = ThemeManager(dark_mode=False)
+        if self.parent():
+            self.theme_manager.apply_theme(self.parent().app)
+        
+        # 创建中心部件
+        central = QWidget()
         # 创建中心部件
         central = QWidget()
         self.setCentralWidget(central)
