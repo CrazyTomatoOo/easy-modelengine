@@ -102,6 +102,36 @@ class TaskPanel(QWidget):
 
         # 过滤按钮区域
         filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(8)
+        filter_layout.setContentsMargins(0, 5, 0, 5)
+        self.filter_all_btn = QPushButton("全部")
+        self.filter_progress_btn = QPushButton("进行中")
+        self.filter_completed_btn = QPushButton("已完成")
+        self.filter_failed_btn = QPushButton("失败")
+
+        self.filter_buttons = {
+            "全部": self.filter_all_btn,
+            "进行中": self.filter_progress_btn,
+            "已完成": self.filter_completed_btn,
+            "失败": self.filter_failed_btn,
+        }
+
+        for btn in self.filter_buttons.values():
+            btn.setCheckable(True)
+            btn.setAutoExclusive(True)
+            btn.setMinimumWidth(60)
+            btn.setStyleSheet("""
+                QPushButton {
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                }
+                QPushButton:checked {
+                    background-color: #2196F3;
+                    color: white;
+                }
+            """)
+            filter_layout.addWidget(btn)
+        filter_layout = QHBoxLayout()
         self.filter_all_btn = QPushButton("全部")
         self.filter_progress_btn = QPushButton("进行中")
         self.filter_completed_btn = QPushButton("已完成")

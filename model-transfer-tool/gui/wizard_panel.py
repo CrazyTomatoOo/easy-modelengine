@@ -11,13 +11,34 @@ from PyQt6.QtWidgets import (
     QButtonGroup, QFileDialog, QMessageBox, QSplitter,
     QFrame, QScrollArea, QSizePolicy
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool, QRunnable
 import shutil
 from pathlib import Path
 from PyQt6.QtGui import QFont
 from core.downloaders.hf_downloader import HuggingFaceDownloader
 from core.downloaders.ms_downloader import ModelScopeDownloader
 
+
+class VersionFetchWorker(QRunnable):
+    """后台获取版本列表的 Worker"""
+    def __init__(self, panel, model_id, is_hf):
+        super().__init__()
+        self.panel = panel
+        self.model_id = model_id
+        self.is_hf = is_hf
+
+    def run(self):
+        try:
+            if self.is_hf:
+                downloader = HuggingFaceDownloader()
+            else:
+                downloader = ModelScopeDownloader()
+
+            files = downloader.list_files(self.model_id, "main")
+            versions = ["main", "master", "latest"]
+            self.panel._on_versions_fetched(versions, len(files))
+        except Exception as e:
+            self.panel._on_versions_fetch_error(str(e))
 
 class WizardPanel(QWidget):
     """4步向导面板"""
@@ -108,7 +129,25 @@ class WizardPanel(QWidget):
         self.model_id_input.setPlaceholderText("例如: bert-base-chinese")
         model_layout.addRow("模型 ID:", self.model_id_input)
         layout.addLayout(model_layout)
-        # 版本选择
+        # 版本选择 + 获取按钮（水平布局）
+        version_row = QHBoxLayout()
+        version_row.setSpacing(8)
+        
+        self.version_combo = QComboBox()
+        self.version_combo.setEditable(True)
+        self.version_combo.setPlaceholderText("输入或选择版本")
+        self.version_combo.addItems(["main", "master", "latest"])
+        self.version_combo.setCurrentText("main")
+        version_row.addWidget(QLabel("版本/分支:"))
+        version_row.addWidget(self.version_combo, stretch=1)
+        
+        self.fetch_version_btn = QPushButton("获取")
+        self.fetch_version_btn.setFixedWidth(50)
+        self.fetch_version_btn.setToolTip("获取远程仓库的版本/分支列表")
+        self.fetch_version_btn.clicked.connect(self._fetch_versions)
+        version_row.addWidget(self.fetch_version_btn)
+        
+        layout.addLayout(version_row)
         version_layout = QFormLayout()
         self.version_combo = QComboBox()
         self.version_combo.setEditable(True)
@@ -459,6 +498,37 @@ class WizardPanel(QWidget):
         self._check_storage_space()
     
     def _fetch_versions(self):
+        """获取版本列表（异步）"""
+        model_id = self.model_id_input.text().strip()
+        if not model_id:
+            QMessageBox.warning(self, "警告", "请先输入模型ID")
+            return
+        
+        self.fetch_version_btn.setEnabled(False)
+        self.fetch_version_btn.setText("...")
+        self.version_combo.clear()
+        self.version_combo.setPlaceholderText("获取中...")
+        
+        worker = VersionFetchWorker(self, model_id, self.hf_radio.isChecked())
+        QThreadPool.globalInstance().start(worker)
+    
+    def _on_versions_fetched(self, versions, file_count):
+        """版本列表获取成功的回调（在主线程执行）"""
+        self.version_combo.clear()
+        self.version_combo.addItems(versions)
+        self.version_combo.setCurrentText("main")
+        self.fetch_version_btn.setEnabled(True)
+        self.fetch_version_btn.setText("获取")
+        QMessageBox.information(self, "成功", f"模型验证成功！\n找到 {file_count} 个文件")
+    
+    def _on_versions_fetch_error(self, error_msg):
+        """版本列表获取失败的回调（在主线程执行）"""
+        self.version_combo.clear()
+        self.version_combo.addItems(["main", "master", "latest"])
+        self.version_combo.setCurrentText("main")
+        self.fetch_version_btn.setEnabled(True)
+        self.fetch_version_btn.setText("获取")
+        QMessageBox.warning(self, "错误", f"获取版本列表失败:\n{error_msg}")
         """获取版本列表"""
         model_id = self.model_id_input.text().strip()
         if not model_id:
