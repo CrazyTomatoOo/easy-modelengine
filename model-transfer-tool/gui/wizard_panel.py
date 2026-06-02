@@ -142,32 +142,16 @@ class WizardPanel(QWidget):
         version_row.addWidget(self.version_combo, stretch=1)
         
         self.fetch_version_btn = QPushButton("获取")
-        self.fetch_version_btn.setFixedWidth(50)
+        self.fetch_version_btn.setFixedWidth(70)
         self.fetch_version_btn.setToolTip("获取远程仓库的版本/分支列表")
         self.fetch_version_btn.clicked.connect(self._fetch_versions)
         version_row.addWidget(self.fetch_version_btn)
         
         layout.addLayout(version_row)
-        version_layout = QFormLayout()
-        self.version_combo = QComboBox()
-        self.version_combo.setEditable(True)
-        self.version_combo.setPlaceholderText("点击右侧按钮获取版本列表")
-        version_layout.addRow("版本/分支:", self.version_combo)
-        layout.addLayout(version_layout)
         
-        # 获取版本按钮
-        self.fetch_version_btn = QPushButton("获取版本列表")
-        self.fetch_version_btn.clicked.connect(self._fetch_versions)
-        layout.addWidget(self.fetch_version_btn)
-        # 版本选择
-        version_layout = QFormLayout()
-        self.version_combo = QComboBox()
-        self.version_combo.setEditable(True)
-        self.version_combo.addItems(["main", "master", "latest"])
-        self.version_combo.setCurrentText("main")
-        version_layout.addRow("版本/分支:", self.version_combo)
-        layout.addLayout(version_layout)
+        # 文件过滤
         
+        # 文件过滤
         # 文件过滤
         filter_layout = QFormLayout()
         self.filter_input = QLineEdit()
