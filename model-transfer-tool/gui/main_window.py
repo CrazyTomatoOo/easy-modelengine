@@ -5,6 +5,7 @@ GUI 主窗口模块
 
 from pathlib import Path
 
+import os
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QSplitter, QStatusBar,
     QMessageBox, QPushButton, QDialog
@@ -248,6 +249,82 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "任务完成", f"任务 {task_id[:8]}... 已成功完成")
 
     def _on_task_created(self, task_data: dict):
+        """处理向导创建的任务"""
+        try:
+            # 转换任务类型
+            task_type_map = {
+                "download_only": TaskType.DOWNLOAD_ONLY,
+                "download_transfer": TaskType.FULL_PIPELINE,
+                "transfer_local": TaskType.TRANSFER_ONLY,
+            }
+            task_type = task_type_map.get(task_data.get("task_type"), TaskType.DOWNLOAD_ONLY)
+
+            # 获取文件列表
+            task_files = []
+            model_source = task_data.get("source", "huggingface")
+            model_id = task_data.get("model_id", "")
+            revision = task_data.get("version", "main")
+
+            self.log_panel.append_info(f"正在创建任务 - 模型: {model_id}, 版本: {revision}, 来源: {model_source}")
+
+            if model_source == "local":
+                # 本地模型 - 扫描目录
+                local_path = Path(model_id)
+                if local_path.exists():
+                    self.log_panel.append_info(f"扫描本地模型目录: {local_path}")
+                    for root, dirs, files in os.walk(local_path):
+                        for file in files:
+                            file_path = Path(root) / file
+                            rel_path = file_path.relative_to(local_path)
+                            size = file_path.stat().st_size
+                            task_files.append(TaskFile(
+                                file_path=str(rel_path),
+                                file_size=size,
+                            ))
+                    self.log_panel.append_info(f"扫描到 {len(task_files)} 个本地文件")
+                else:
+                    self.log_panel.append_error(f"本地模型目录不存在: {local_path}")
+            elif model_id and task_type != TaskType.TRANSFER_ONLY:
+                try:
+                    if model_source == "huggingface":
+                        downloader = HuggingFaceDownloader()
+                    else:
+                        downloader = ModelScopeDownloader()
+
+                    files = downloader.list_files(model_id, revision)
+                    task_files = [
+                        TaskFile(
+                            file_path=f.path,
+                            file_size=f.size,
+                        )
+                        for f in files
+                    ]
+                    self.log_panel.append_info(f"获取到 {len(files)} 个文件")
+                except Exception as e:
+                    self.log_panel.append_error(f"获取文件列表失败: {str(e)}")
+
+            # 创建任务配置
+            cache_dir = task_data.get("cache_dir")
+            config = TaskConfig(
+                task_type=task_type,
+                model_source=model_source,
+                model_id=model_id,
+                revision=revision,
+                local_cache_dir=Path(cache_dir) if cache_dir else Path("cache"),
+                file_filter=task_data.get("filter") or None,
+                remote_host=task_data.get("server"),
+                remote_path=task_data.get("target_dir"),
+                files=task_files,
+            )
+
+            # 创建任务
+            task_id = self.task_manager.create_task(config)
+            self.task_panel.add_task(task_id, model_id or "未知模型")
+            self.log_panel.append_success(f"任务已创建: {task_id[:8]}...")
+
+        except Exception as e:
+            self.log_panel.append_error(f"创建任务失败: {str(e)}")
+            QMessageBox.critical(self, "错误", f"创建任务失败: {str(e)}")
         """处理向导创建的任务"""
         try:
             # 转换任务类型

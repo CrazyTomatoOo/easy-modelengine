@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool, QRunnable
 import shutil
+import os
 from pathlib import Path
 from PyQt6.QtGui import QFont
 from core.downloaders.hf_downloader import HuggingFaceDownloader
@@ -39,6 +40,7 @@ class VersionFetchWorker(QRunnable):
             self.panel._on_versions_fetched(versions, len(files))
         except Exception as e:
             self.panel._on_versions_fetch_error(str(e))
+
 
 class WizardPanel(QWidget):
     """4步向导面板"""
@@ -118,18 +120,29 @@ class WizardPanel(QWidget):
         source_layout = QHBoxLayout(source_group)
         self.hf_radio = QRadioButton("HuggingFace")
         self.ms_radio = QRadioButton("ModelScope")
+        self.local_radio = QRadioButton("本地模型")
         self.hf_radio.setChecked(True)
+        self.source_btn_group = QButtonGroup(self)
+        self.source_btn_group.addButton(self.hf_radio, 0)
+        self.source_btn_group.addButton(self.ms_radio, 1)
+        self.source_btn_group.addButton(self.local_radio, 2)
         source_layout.addWidget(self.hf_radio)
         source_layout.addWidget(self.ms_radio)
+        source_layout.addWidget(self.local_radio)
         source_layout.addStretch()
         layout.addWidget(source_group)
+        
+        # 远程模型输入区域
+        self.remote_model_widget = QWidget()
+        remote_layout = QVBoxLayout(self.remote_model_widget)
+        remote_layout.setContentsMargins(0, 0, 0, 0)
         
         # 模型 ID
         model_layout = QFormLayout()
         self.model_id_input = QLineEdit()
         self.model_id_input.setPlaceholderText("例如: bert-base-chinese")
         model_layout.addRow("模型 ID:", self.model_id_input)
-        layout.addLayout(model_layout)
+        remote_layout.addLayout(model_layout)
         
         # 版本选择 + 获取按钮（水平布局）
         version_row = QHBoxLayout()
@@ -149,7 +162,25 @@ class WizardPanel(QWidget):
         self.fetch_version_btn.clicked.connect(self._fetch_versions)
         version_row.addWidget(self.fetch_version_btn)
         
-        layout.addLayout(version_row)
+        remote_layout.addLayout(version_row)
+        layout.addWidget(self.remote_model_widget)
+        
+        # 本地模型输入区域（默认隐藏）
+        self.local_model_widget = QWidget()
+        local_model_layout = QHBoxLayout(self.local_model_widget)
+        local_model_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.local_path_input = QLineEdit()
+        self.local_path_input.setPlaceholderText("选择本地模型目录")
+        self.local_path_input.setReadOnly(True)
+        self.local_browse_btn = QPushButton("浏览...")
+        self.local_browse_btn.clicked.connect(self._browse_local_model)
+        local_model_layout.addWidget(QLabel("本地路径:"))
+        local_model_layout.addWidget(self.local_path_input, stretch=1)
+        local_model_layout.addWidget(self.local_browse_btn)
+        
+        self.local_model_widget.hide()
+        layout.addWidget(self.local_model_widget)
         
         # 文件过滤
         filter_layout = QFormLayout()
@@ -346,6 +377,10 @@ class WizardPanel(QWidget):
         self.next_btn.clicked.connect(self.go_next)
         self.finish_btn.clicked.connect(self._on_finish)
         
+        self.hf_radio.toggled.connect(self._on_source_changed)
+        self.ms_radio.toggled.connect(self._on_source_changed)
+        self.local_radio.toggled.connect(self._on_source_changed)
+        
         self.cache_btn.clicked.connect(self._browse_cache_dir)
         self.download_transfer_radio.toggled.connect(self._on_task_type_changed)
         self.transfer_local_radio.toggled.connect(self._on_task_type_changed)
@@ -355,6 +390,20 @@ class WizardPanel(QWidget):
         self.cancel_btn.clicked.connect(self._on_cancel)
         self.retry_btn.clicked.connect(self._on_retry)
         self.export_btn.clicked.connect(self._on_export)
+    
+    def _on_source_changed(self):
+        """模型来源切换"""
+        is_local = self.local_radio.isChecked()
+        self.remote_model_widget.setVisible(not is_local)
+        self.local_model_widget.setVisible(is_local)
+        
+        if is_local:
+            self.log_signal.emit("切换到本地模型模式", "INFO")
+            # 自动选择传输任务
+            self.transfer_local_radio.setChecked(True)
+        else:
+            source = "HuggingFace" if self.hf_radio.isChecked() else "ModelScope"
+            self.log_signal.emit(f"切换到远程模型模式: {source}", "INFO")
     
     def _on_task_type_changed(self):
         """任务类型改变"""
@@ -366,6 +415,37 @@ class WizardPanel(QWidget):
         dir_path = QFileDialog.getExistingDirectory(self, "选择缓存目录")
         if dir_path:
             self.cache_input.setText(dir_path)
+    
+    def _browse_local_model(self):
+        """浏览本地模型目录"""
+        dir_path = QFileDialog.getExistingDirectory(self, "选择本地模型目录")
+        if dir_path:
+            self.local_path_input.setText(dir_path)
+            self.log_signal.emit(f"已选择本地模型目录: {dir_path}", "INFO")
+            # 扫描目录中的文件
+            self._scan_local_files(dir_path)
+    
+    def _scan_local_files(self, dir_path):
+        """扫描本地模型目录中的文件"""
+        try:
+            self.files_tree.clear()
+            file_count = 0
+            total_size = 0
+            
+            for root, dirs, files in os.walk(dir_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(file_path, dir_path)
+                    size = os.path.getsize(file_path)
+                    total_size += size
+                    size_str = self._format_size(size)
+                    item = QTreeWidgetItem([rel_path, size_str, "待传输"])
+                    self.files_tree.addTopLevelItem(item)
+                    file_count += 1
+            
+            self.log_signal.emit(f"扫描到 {file_count} 个文件, 总大小: {self._format_size(total_size)}", "INFO")
+        except Exception as e:
+            self.log_signal.emit(f"扫描本地文件失败: {str(e)}", "ERROR")
     
     def _update_ui(self):
         """更新UI状态"""
@@ -383,15 +463,18 @@ class WizardPanel(QWidget):
     
     def _update_summary(self):
         """更新任务摘要"""
-        # 模型来源
-        if self.hf_radio.isChecked():
+        if self.local_radio.isChecked():
+            self.summary_source.setText("本地模型")
+            self.summary_model.setText(self.local_path_input.text() or "-")
+            self.summary_version.setText("-")
+        elif self.hf_radio.isChecked():
             self.summary_source.setText("HuggingFace")
+            self.summary_model.setText(self.model_id_input.text() or "-")
+            self.summary_version.setText(self.version_combo.currentText())
         else:
             self.summary_source.setText("ModelScope")
-        
-        # 模型信息
-        self.summary_model.setText(self.model_id_input.text() or "-")
-        self.summary_version.setText(self.version_combo.currentText())
+            self.summary_model.setText(self.model_id_input.text() or "-")
+            self.summary_version.setText(self.version_combo.currentText())
         
         # 任务类型
         task_id = self.task_group_btn.checkedId()
@@ -446,42 +529,6 @@ class WizardPanel(QWidget):
         self.fetch_version_btn.setEnabled(True)
         self.fetch_version_btn.setText("获取")
         self.log_signal.emit(f"获取版本列表失败: {error_msg}", "ERROR")
-    
-    def _fetch_file_list(self):
-        """获取文件列表"""
-        model_id = self.model_id_input.text().strip()
-        version = self.version_combo.currentText()
-        
-        if not model_id or not version:
-            return
-        
-        try:
-            if self.hf_radio.isChecked():
-                downloader = HuggingFaceDownloader()
-            else:
-                downloader = ModelScopeDownloader()
-            
-            files = downloader.list_files(model_id, version)
-            
-            # 应用文件过滤
-            filter_pattern = self.filter_input.text().strip()
-            if filter_pattern:
-                import fnmatch
-                patterns = [p.strip() for p in filter_pattern.split(",")]
-                files = [f for f in files if any(fnmatch.fnmatch(f.path, p) for p in patterns)]
-            
-            # 显示文件列表
-            for file_info in files:
-                size_str = self._format_size(file_info.size)
-                item = QTreeWidgetItem([file_info.path, size_str, "待下载"])
-                self.files_tree.addTopLevelItem(item)
-            
-            self.log_signal.emit(f"获取到 {len(files)} 个文件", "INFO")
-            
-        except Exception as e:
-            item = QTreeWidgetItem([f"获取文件列表失败: {str(e)}", "", ""])
-            self.files_tree.addTopLevelItem(item)
-            self.log_signal.emit(f"获取文件列表失败: {str(e)}", "ERROR")
     
     def _format_size(self, size_bytes):
         """格式化文件大小"""
@@ -548,6 +595,18 @@ class WizardPanel(QWidget):
         task_id = self.task_group_btn.checkedId()
         task_type = ["download_only", "download_transfer", "transfer_local"][task_id]
         
+        if self.local_radio.isChecked():
+            return {
+                "source": "local",
+                "model_id": self.local_path_input.text(),
+                "version": "local",
+                "filter": self.filter_input.text(),
+                "task_type": task_type,
+                "cache_dir": self.local_path_input.text(),
+                "server": self.server_combo.currentText() if task_id in [1, 2] else None,
+                "target_dir": self.target_dir_input.text() if task_id in [1, 2] else None,
+            }
+        
         return {
             "source": "huggingface" if self.hf_radio.isChecked() else "modelscope",
             "model_id": self.model_id_input.text(),
@@ -597,17 +656,27 @@ class WizardPanel(QWidget):
         """下一步"""
         if self.current_step == 0:
             # Step 1 验证
-            model_id = self.model_id_input.text().strip()
-            if not model_id:
-                QMessageBox.warning(self, "警告", "请输入模型ID")
-                return
-            
-            version = self.version_combo.currentText()
-            if not version or version == "输入模型ID后自动获取...":
-                QMessageBox.warning(self, "警告", "请选择或输入版本/分支")
-                return
-            
-            self.log_signal.emit(f"步骤1完成 - 模型: {model_id}, 版本: {version}", "INFO")
+            if self.local_radio.isChecked():
+                local_path = self.local_path_input.text().strip()
+                if not local_path:
+                    QMessageBox.warning(self, "警告", "请选择本地模型目录")
+                    return
+                if not os.path.exists(local_path):
+                    QMessageBox.warning(self, "警告", "所选目录不存在")
+                    return
+                self.log_signal.emit(f"步骤1完成 - 本地模型: {local_path}", "INFO")
+            else:
+                model_id = self.model_id_input.text().strip()
+                if not model_id:
+                    QMessageBox.warning(self, "警告", "请输入模型ID")
+                    return
+                
+                version = self.version_combo.currentText()
+                if not version or version == "输入模型ID后自动获取...":
+                    QMessageBox.warning(self, "警告", "请选择或输入版本/分支")
+                    return
+                
+                self.log_signal.emit(f"步骤1完成 - 模型: {model_id}, 版本: {version}", "INFO")
         
         elif self.current_step == 1:
             # Step 2 验证
@@ -646,7 +715,9 @@ class WizardPanel(QWidget):
         self.current_step = 0
         self.model_id_input.clear()
         self.version_combo.setCurrentText("main")
+        self.local_path_input.clear()
         self.filter_input.clear()
+        self.hf_radio.setChecked(True)
         self.download_only_radio.setChecked(True)
         self.cache_input.clear()
         self.server_combo.setCurrentIndex(0)
@@ -655,6 +726,7 @@ class WizardPanel(QWidget):
         self.speed_label.setText("速度: -")
         self.eta_label.setText("预计剩余时间: -")
         self.status_list.clear()
+        self.files_tree.clear()
         self._update_ui()
         self.log_signal.emit("向导已重置", "INFO")
     
