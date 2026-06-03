@@ -527,31 +527,6 @@ class WizardPanel(QWidget):
             self._scan_local_files(dir_path)
             self._save_settings()
     
-    def _on_task_type_changed(self):
-        """任务类型改变"""
-        show_transfer = self.download_transfer_radio.isChecked() or self.transfer_local_radio.isChecked()
-        self.transfer_group.setVisible(show_transfer)
-        
-        # 仅传输本地文件时，不需要缓存目录
-        show_cache = not self.transfer_local_radio.isChecked()
-        self.cache_widget.setVisible(show_cache)
-    
-    def _browse_cache_dir(self):
-        """浏览缓存目录"""
-        dir_path = QFileDialog.getExistingDirectory(self, "选择缓存目录")
-        if dir_path:
-            self.cache_input.setText(dir_path)
-            self._save_settings()
-    
-    def _browse_local_model(self):
-        """浏览本地模型目录"""
-        dir_path = QFileDialog.getExistingDirectory(self, "选择本地模型目录")
-        if dir_path:
-            self.local_path_input.setText(dir_path)
-            self.log_signal.emit(f"已选择本地模型目录: {dir_path}", "INFO")
-            # 扫描目录中的文件
-            self._scan_local_files(dir_path)
-            self._save_settings()
     
     def _scan_local_files(self, dir_path):
         """扫描本地模型目录中的文件"""
