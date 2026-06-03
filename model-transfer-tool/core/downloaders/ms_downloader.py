@@ -1,3 +1,4 @@
+import os
 import shutil
 import tempfile
 import threading
@@ -12,11 +13,12 @@ from core.interfaces import DownloadStrategy, FileInfo
 
 
 class ModelScopeDownloader(DownloadStrategy):
-    def __init__(self, token: Optional[str] = None, cache_dir: Optional[Path] = None):
+    def __init__(self, token: Optional[str] = None, cache_dir: Optional[Path] = None, proxy: Optional[str] = None):
         self.api = HubApi()
         if token:
             self.api.login(token)
         self.cache_dir = cache_dir
+        self.proxy = proxy
 
     def list_files(self, model_id: str, revision: str) -> list[FileInfo]:
         try:
@@ -79,6 +81,11 @@ class ModelScopeDownloader(DownloadStrategy):
                 monitor_thread.start()
 
             try:
+                # 设置代理环境变量（如果配置了）
+                if self.proxy:
+                    os.environ['HTTP_PROXY'] = self.proxy
+                    os.environ['HTTPS_PROXY'] = self.proxy
+                
                 cache_dir = str(self.cache_dir) if self.cache_dir else None
                 downloaded_path = model_file_download(
                     model_id=model_id,
@@ -91,6 +98,10 @@ class ModelScopeDownloader(DownloadStrategy):
                 stop_event.set()
                 if monitor_thread:
                     monitor_thread.join(timeout=2)
+                # 清理代理环境变量
+                if self.proxy:
+                    os.environ.pop('HTTP_PROXY', None)
+                    os.environ.pop('HTTPS_PROXY', None)
 
             if downloaded_path is None:
                 return False

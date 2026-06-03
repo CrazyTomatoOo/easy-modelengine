@@ -114,14 +114,7 @@ class TaskManager(QObject):
         if model_source == "huggingface":
             return HuggingFaceDownloader(proxy=proxy)
         elif model_source == "modelscope":
-            return ModelScopeDownloader()
-        else:
-            raise ValueError(f"不支持的模型源: {model_source}")
-        """根据模型源创建下载器"""
-        if model_source == "huggingface":
-            return HuggingFaceDownloader()
-        elif model_source == "modelscope":
-            return ModelScopeDownloader()
+            return ModelScopeDownloader(proxy=proxy)
         else:
             raise ValueError(f"不支持的模型源: {model_source}")
 
