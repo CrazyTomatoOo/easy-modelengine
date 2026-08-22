@@ -7,6 +7,7 @@ from core.database import Database
 from core.task_config import TaskConfig, TaskType, TaskState, TaskFile
 from core.interfaces import FileInfo
 from core.downloaders.hf_downloader import HuggingFaceDownloader
+from core.downloaders.local_strategy import LocalDirStrategy
 from core.downloaders.ms_downloader import ModelScopeDownloader
 from core.verifier import FileVerifier
 from core.workers import DownloadWorker, TransferWorker
@@ -115,6 +116,8 @@ class TaskManager(QObject):
             return HuggingFaceDownloader(proxy=proxy)
         elif model_source == "modelscope":
             return ModelScopeDownloader(proxy=proxy)
+        elif model_source == "local":
+            return LocalDirStrategy()
         else:
             raise ValueError(f"不支持的模型源: {model_source}")
 
@@ -298,27 +301,14 @@ class TaskManager(QObject):
         task = self._db.get_task(task_id)
         if task is None:
             return
-        
+
         task_type = TaskType(task.task_type)
-        
+
         if task_type == TaskType.FULL_PIPELINE:
             runnable = StageRunnable(self, task_id, self._execute_transfer_stage)
             self._transfer_pool.start(runnable)
         else:
             self._complete_task(task_id)
-        """验证阶段完成后的处理"""
-        task = self._db.get_task(task_id)
-        if task is None:
-            return
-
-        task_type = TaskType(task.task_type)
-
-        if task_type == TaskType.TRANSFER_ONLY:
-            self._complete_task(task_id)
-        else:
-            # FULL_PIPELINE 进入传输阶段
-            runnable = StageRunnable(self, task_id, self._execute_transfer_stage)
-            self._transfer_pool.start(runnable)
 
     def _execute_transfer_stage(self, task_id: str) -> None:
         """执行传输阶段"""
