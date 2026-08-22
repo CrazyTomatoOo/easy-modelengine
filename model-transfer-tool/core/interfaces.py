@@ -9,6 +9,7 @@ class FileInfo:
     path: str
     size: int
     url: Optional[str] = None
+    expected_hash: Optional[str] = None
 
 
 class DownloadStrategy(ABC):

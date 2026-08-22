@@ -253,14 +253,17 @@ class MainWindow(QMainWindow):
     def _on_pause_task(self, task_id: str):
         """暂停任务"""
         self.log_panel.append_info(f"暂停任务: {task_id[:8]}...")
+        self.task_manager.pause_task(task_id)
 
     def _on_resume_task(self, task_id: str):
         """恢复任务"""
         self.log_panel.append_info(f"恢复任务: {task_id[:8]}...")
+        self.task_manager.resume_task(task_id)
 
     def _on_cancel_task(self, task_id: str):
         """取消任务"""
         self.log_panel.append_info(f"取消任务: {task_id[:8]}...")
+        self.task_manager.cancel_task(task_id)
 
     def _on_wizard_log(self, message: str, level: str):
         """处理向导面板的日志信号"""

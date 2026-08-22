@@ -36,7 +36,8 @@ class HuggingFaceDownloader(DownloadStrategy):
             )
             size = getattr(file_info, "size", 0)
             url = getattr(file_info, "blob_id", None)
-            file_infos.append(FileInfo(path=file_path, size=size, url=url))
+            lfs_sha256 = getattr(getattr(file_info, "lfs", None), "sha256", None)
+            file_infos.append(FileInfo(path=file_path, size=size, url=url, expected_hash=lfs_sha256))
 
         return file_infos
 

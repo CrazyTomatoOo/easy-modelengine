@@ -47,6 +47,17 @@ def _draft(**overrides):
 
 
 class TestBuildRemote:
+    def test_expected_hash_carried_from_listing(self):
+        strategies = {"huggingface": FakeStrategy([FileInfo(path="big.bin", size=10, expected_hash="a" * 64)])}
+        config = build(_draft(), strategies=strategies)
+        assert config.files[0].expected_hash == "a" * 64
+        assert config.files[0].hash_algorithm == "sha256"
+
+    def test_no_hash_stays_none(self):
+        config = build(_draft(), strategies=STRATEGIES)
+        assert config.files[0].expected_hash is None
+        assert config.files[0].hash_algorithm is None
+
     def test_download_only_maps_task_type(self):
         config = build(_draft(), strategies=STRATEGIES)
         assert config.task_type == TaskType.DOWNLOAD_ONLY

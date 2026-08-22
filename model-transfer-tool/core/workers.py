@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -35,10 +36,12 @@ class DownloadWorker(QRunnable):
         self.local_path = Path(local_path)
         self.signals = WorkerSignals()
         self._cancelled = False
+        self.done_event = threading.Event()
 
     def run(self):
         """执行下载任务"""
         if self._cancelled:
+            self.done_event.set()
             return
 
         try:
@@ -84,6 +87,8 @@ class DownloadWorker(QRunnable):
                     self.file_info.path,
                     str(e),
                 )
+        finally:
+            self.done_event.set()
 
     def cancel(self):
         """取消下载任务"""
@@ -109,10 +114,12 @@ class TransferWorker(QRunnable):
         self.remote_path = remote_path
         self.signals = WorkerSignals()
         self._cancelled = False
+        self.done_event = threading.Event()
 
     def run(self):
         """执行传输任务"""
         if self._cancelled:
+            self.done_event.set()
             return
 
         try:
@@ -156,6 +163,8 @@ class TransferWorker(QRunnable):
                     self.file_path,
                     str(e),
                 )
+        finally:
+            self.done_event.set()
 
     def cancel(self):
         """取消传输任务"""

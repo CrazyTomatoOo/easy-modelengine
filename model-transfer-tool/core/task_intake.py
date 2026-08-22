@@ -116,7 +116,15 @@ def build(
     else:
         strategy = resolve_strategy(draft.source, strategies)
         files = strategy.list_files(draft.model_id, draft.revision)
-        task_files = [TaskFile(file_path=f.path, file_size=f.size) for f in files]
+        task_files = [
+            TaskFile(
+                file_path=f.path,
+                file_size=f.size,
+                expected_hash=f.expected_hash,
+                hash_algorithm="sha256" if f.expected_hash else None,
+            )
+            for f in files
+        ]
 
     return TaskConfig(
         task_type=task_type,

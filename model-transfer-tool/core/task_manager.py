@@ -31,6 +31,7 @@ class TaskManager(QObject):
     task_error = pyqtSignal(str, str, str)
     task_warning = pyqtSignal(str, str, str)
     task_completed = pyqtSignal(str)
+    task_failed = pyqtSignal(str)
 
     MAX_CONCURRENT_TASKS = 2
 
@@ -51,6 +52,9 @@ class TaskManager(QObject):
         self._task_file_completed: dict[str, set[str]] = {}
         self._task_file_failed: dict[str, set[str]] = {}
         self._task_file_total: dict[str, int] = {}
+
+        # 被暂停/取消的退役 worker:恢复前等待其真正结束,避免并发写同一文件
+        self._retired_workers: dict[str, list] = {}
 
     def create_task(self, config: TaskConfig) -> str:
         task_id = self._db.create_task(
@@ -91,6 +95,18 @@ class TaskManager(QObject):
                 self._active_tasks.remove(task_id)
             return
 
+        if task.state == TaskState.CANCELLED.value:
+            if task_id in self._active_tasks:
+                self._active_tasks.remove(task_id)
+            self._try_schedule_next()
+            return
+
+        # 从传输暂停恢复:直接回到传输阶段(避免 FULL_PIPELINE 误入下载)
+        if task.state == TaskState.PAUSED_TRANSFER.value:
+            runnable = StageRunnable(self, task_id, self._execute_transfer_stage)
+            self._transfer_pool.start(runnable)
+            return
+
         task_type = TaskType(task.task_type)
 
         if task_type == TaskType.DOWNLOAD_ONLY:
@@ -112,6 +128,9 @@ class TaskManager(QObject):
             raise ValueError(f"不支持的模型源: {model_source}")
 
     def _execute_download_stage(self, task_id: str) -> None:
+        task = self._db.get_task(task_id)
+        if task is None or task.state == TaskState.CANCELLED.value:
+            return
         self._db.update_task_state(task_id, TaskState.DOWNLOADING.value)
         self.task_state_changed.emit(task_id, TaskState.DOWNLOADING.value)
 
@@ -128,9 +147,25 @@ class TaskManager(QObject):
         self._task_file_failed[task_id] = set()
         self._task_file_total[task_id] = len(files)
 
+        # 跳过已完成文件(本地存在、无 .tmp、大小一致)——恢复调度不再重下
+        cache = Path(task.local_cache_dir)
+        pending = []
+        for file_dict in files:
+            target = cache / file_dict["file_path"]
+            tmp = cache / (file_dict["file_path"] + ".tmp")
+            if (target.exists() and not tmp.exists()
+                    and target.stat().st_size == file_dict["file_size"]):
+                self._task_file_completed[task_id].add(file_dict["file_path"])
+            else:
+                pending.append(file_dict)
+
+        if not pending:
+            self._check_download_complete(task_id)
+            return
+
         downloader = self._create_downloader(task.model_source)
 
-        for file_dict in files:
+        for file_dict in pending:
             file_info = FileInfo(
                 path=file_dict['file_path'],
                 size=file_dict['file_size'],
@@ -194,13 +229,21 @@ class TaskManager(QObject):
         self._check_download_complete(task_id)
 
     def _check_download_complete(self, task_id: str):
-        """检查下载阶段是否全部完成"""
+        """检查下载阶段是否全部完成(暂停/取消时残留信号不得推进)"""
+        task = self._db.get_task(task_id)
+        if task is not None and task.state in (
+            TaskState.PAUSED_DOWNLOAD.value, TaskState.CANCELLED.value,
+        ):
+            return
         total = self._task_file_total.get(task_id, 0)
         completed = len(self._task_file_completed.get(task_id, set()))
         failed = len(self._task_file_failed.get(task_id, set()))
 
         if completed + failed >= total:
-            self._on_download_stage_complete(task_id)
+            if failed > 0:
+                self._fail_task(task_id)
+            else:
+                self._on_download_stage_complete(task_id)
 
     def _on_download_stage_complete(self, task_id: str):
         """下载阶段完成后的处理"""
@@ -217,6 +260,8 @@ class TaskManager(QObject):
         task = self._db.get_task(task_id)
         if task is None:
             return
+        if task.state in (TaskState.CANCELLED.value, TaskState.PAUSED_DOWNLOAD.value):
+            return
 
         task_type = TaskType(task.task_type)
 
@@ -229,6 +274,9 @@ class TaskManager(QObject):
 
     def _execute_verify_stage(self, task_id: str) -> None:
         """执行校验阶段"""
+        task = self._db.get_task(task_id)
+        if task is None or task.state == TaskState.CANCELLED.value:
+            return
         self._db.update_task_state(task_id, TaskState.VERIFYING.value)
         self.task_state_changed.emit(task_id, TaskState.VERIFYING.value)
 
@@ -284,12 +332,17 @@ class TaskManager(QObject):
                     )
                     all_verified = False
 
-        self._on_verify_stage_complete(task_id)
+        if all_verified:
+            self._on_verify_stage_complete(task_id)
+        else:
+            self._fail_task(task_id)
 
     def _on_verify_stage_complete(self, task_id: str):
         """验证阶段完成后的处理"""
         task = self._db.get_task(task_id)
         if task is None:
+            return
+        if task.state == TaskState.CANCELLED.value:
             return
 
         task_type = TaskType(task.task_type)
@@ -299,6 +352,103 @@ class TaskManager(QObject):
             self._transfer_pool.start(runnable)
         else:
             self._complete_task(task_id)
+
+    def pause_task(self, task_id: str) -> None:
+        """暂停任务(仅下载/传输阶段)。运行中的文件 worker 被取消跟踪;排队 worker 不再启动。"""
+        task = self._db.get_task(task_id)
+        if task is None:
+            return
+        state = task.state
+        if state == TaskState.DOWNLOADING.value:
+            self._set_paused(task_id, TaskState.PAUSED_DOWNLOAD)
+        elif state == TaskState.TRANSFERRING.value:
+            self._set_paused(task_id, TaskState.PAUSED_TRANSFER)
+        else:
+            self.task_warning.emit(task_id, "lifecycle", "当前阶段不可暂停(等待/校验/已完成/失败)")
+
+    def resume_task(self, task_id: str) -> None:
+        """恢复暂停的任务。丢弃未完成文件的 .tmp 重新全量调度,保证无并发写。"""
+        task = self._db.get_task(task_id)
+        if task is None:
+            return
+        state = task.state
+        if state in (TaskState.PAUSED_DOWNLOAD.value, TaskState.PAUSED_TRANSFER.value):
+            # 等待被暂停的旧 worker 真正结束(它们仍在写 .tmp),避免并发写同一文件
+            self._wait_retired(task_id)
+            # 放回队列由调度器启动:保证并发名额上限(MAX_CONCURRENT_TASKS)不被突破
+            self._discard_tmp_files(task_id)
+            if task_id not in self._task_queue and task_id not in self._active_tasks:
+                self._task_queue.append(task_id)
+            self._try_schedule_next()
+        else:
+            self.task_warning.emit(task_id, "lifecycle", "任务当前不在可恢复状态")
+
+    def cancel_task(self, task_id: str) -> None:
+        """取消任务:置 CANCELLED,活跃 worker 收到 cancel,已下载部分保留。"""
+        task = self._db.get_task(task_id)
+        if task is None:
+            return
+        state = task.state
+        if state in (
+            TaskState.PENDING.value,
+            TaskState.DOWNLOADING.value,
+            TaskState.PAUSED_DOWNLOAD.value,
+            TaskState.VERIFYING.value,
+            TaskState.TRANSFERRING.value,
+            TaskState.PAUSED_TRANSFER.value,
+        ):
+            self._cancel_workers(task_id)
+            self._db.update_task_state(task_id, TaskState.CANCELLED.value)
+            self.task_state_changed.emit(task_id, TaskState.CANCELLED.value)
+            for attr in ("_task_file_completed", "_task_file_failed", "_task_file_total"):
+                getattr(self, attr).pop(task_id, None)
+            if task_id in self._task_queue:
+                self._task_queue.remove(task_id)
+            self._active_tasks.discard(task_id)
+            self._try_schedule_next()
+        else:
+            self.task_warning.emit(task_id, "lifecycle", "任务已完成或已结束,无法取消")
+
+    def _set_paused(self, task_id: str, paused_state: TaskState) -> None:
+        self._db.update_task_state(task_id, paused_state.value)
+        self.task_state_changed.emit(task_id, paused_state.value)
+        self._cancel_workers(task_id)
+        self._active_tasks.discard(task_id)
+        self._try_schedule_next()
+
+    def _cancel_workers(self, task_id: str) -> None:
+        retired = []
+        for workers in (self._active_download_workers.get(task_id, {}).values(),
+                        self._active_transfer_workers.get(task_id, {}).values()):
+            for worker in workers:
+                worker.cancel()
+                retired.append(worker)
+        self._active_download_workers.pop(task_id, None)
+        self._active_transfer_workers.pop(task_id, None)
+        if retired:
+            self._retired_workers[task_id] = retired
+
+    def _wait_retired(self, task_id: str) -> None:
+        """等待该任务被暂停/取消的 worker 真正结束(其下载仍在写同一 .tmp)。"""
+        workers = self._retired_workers.pop(task_id, [])
+        for worker in workers:
+            worker.done_event.wait()
+
+    def _discard_tmp_files(self, task_id: str) -> None:
+        """删除任务未完成文件的 .tmp,恢复时全量重下,避免与旧 worker 并发写同一文件。"""
+        task = self._db.get_task(task_id)
+        if task is None:
+            return
+        try:
+            cache = Path(task.local_cache_dir)
+        except (TypeError, ValueError):
+            return
+        for file_dict in self._db.get_task_files(task_id):
+            tmp = cache / (file_dict["file_path"] + ".tmp")
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _build_transfer(self, task, profile=None) -> RsyncTransfer:
         """按任务引用的 Server profile 构造传输器。
@@ -316,6 +466,9 @@ class TaskManager(QObject):
 
     def _execute_transfer_stage(self, task_id: str) -> None:
         """执行传输阶段"""
+        task = self._db.get_task(task_id)
+        if task is None or task.state == TaskState.CANCELLED.value:
+            return
         self._db.update_task_state(task_id, TaskState.TRANSFERRING.value)
         self.task_state_changed.emit(task_id, TaskState.TRANSFERRING.value)
 
@@ -402,30 +555,58 @@ class TaskManager(QObject):
         self._check_transfer_complete(task_id)
 
     def _check_transfer_complete(self, task_id: str):
-        """检查传输阶段是否全部完成"""
+        """检查传输阶段是否全部完成(暂停/取消时残留信号不得推进)"""
+        task = self._db.get_task(task_id)
+        if task is not None and task.state in (
+            TaskState.PAUSED_TRANSFER.value, TaskState.CANCELLED.value,
+        ):
+            return
         total = self._task_file_total.get(task_id, 0)
         completed = len(self._task_file_completed.get(task_id, set()))
         failed = len(self._task_file_failed.get(task_id, set()))
 
         if completed + failed >= total:
-            self._on_transfer_stage_complete(task_id)
+            if failed > 0:
+                self._fail_task(task_id)
+            else:
+                self._on_transfer_stage_complete(task_id)
 
     def _on_transfer_stage_complete(self, task_id: str):
         """传输阶段完成后的处理"""
-        # 清理传输状态
-        if task_id in self._active_transfer_workers:
-            del self._active_transfer_workers[task_id]
-        if task_id in self._task_file_completed:
-            del self._task_file_completed[task_id]
-        if task_id in self._task_file_failed:
-            del self._task_file_failed[task_id]
-        if task_id in self._task_file_total:
-            del self._task_file_total[task_id]
+        task = self._db.get_task(task_id)
+        if task is None:
+            return
+        if task.state in (TaskState.CANCELLED.value, TaskState.PAUSED_TRANSFER.value):
+            return
+
+        for attr in ("_active_transfer_workers", "_task_file_completed",
+                     "_task_file_failed", "_task_file_total"):
+            getattr(self, attr).pop(task_id, None)
 
         self._complete_task(task_id)
 
+    def _fail_task(self, task_id: str):
+        """任务失败:更新状态、广播、清理残留、释放并发名额(不进入后续阶段)。"""
+        task = self._db.get_task(task_id)
+        if task is None or task.state == TaskState.CANCELLED.value:
+            return
+        self._db.update_task_state(task_id, TaskState.FAILED.value)
+        self.task_state_changed.emit(task_id, TaskState.FAILED.value)
+        self.task_failed.emit(task_id)
+
+        for attr in ("_active_download_workers", "_active_transfer_workers",
+                     "_task_file_completed", "_task_file_failed", "_task_file_total"):
+            getattr(self, attr).pop(task_id, None)
+
+        if task_id in self._active_tasks:
+            self._active_tasks.remove(task_id)
+        self._try_schedule_next()
+
     def _complete_task(self, task_id: str):
-        """完成任务"""
+        """完成任务(CANCELLED 终态不被覆盖)"""
+        task = self._db.get_task(task_id)
+        if task is None or task.state == TaskState.CANCELLED.value:
+            return
         self._db.update_task_state(task_id, TaskState.COMPLETED.value)
         self.task_state_changed.emit(task_id, TaskState.COMPLETED.value)
         self.task_completed.emit(task_id)

@@ -5,7 +5,7 @@
 ## Language
 
 **Task**:
-一个工作单元——从 HuggingFace/ModelScope/本地目录将模型文件下载到本地缓存,可选再传输到远程服务器。
+一个工作单元——从 HuggingFace/ModelScope/本地目录将模型文件下载到本地缓存,可选再传输到远程服务器。生命周期:任意文件失败即 FAILED(停止后续阶段);下载/传输阶段可暂停/恢复(断点续传)与取消(丢弃,保留已下载部分)。
 _Avoid_: job, download job
 
 **TaskConfig**:
