@@ -29,7 +29,7 @@ _Avoid_: file entry, file row
 _Avoid_: setup wizard, form
 
 **Server profile**:
-服务器连接配置——主机、用户名、端口、SSH 密钥或密码;加密保存在数据库中。当前尚无消费者(wizard 与 Task intake 未读取)。
+服务器连接配置——主机、端口、用户名、认证类型与加密凭据;以 `server_configs` 表持久化。wizard 的服务器下拉与 Task 传输阶段按 name 引用它;SSH 密钥认证可用,密码认证待 rsync 密码通道(候选 6)。
 _Avoid_: server config, server settings
 
 **Proxy**:

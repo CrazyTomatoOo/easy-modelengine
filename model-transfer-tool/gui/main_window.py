@@ -183,6 +183,7 @@ class MainWindow(QMainWindow):
         self.task_manager.task_state_changed.connect(self._on_task_state_changed)
         self.task_manager.task_progress.connect(self._on_task_progress)
         self.task_manager.task_error.connect(self._on_task_error)
+        self.task_manager.task_warning.connect(self._on_task_warning)
         self.task_manager.task_completed.connect(self._on_task_completed)
 
         # WizardPanel 任务创建信号
@@ -230,6 +231,10 @@ class MainWindow(QMainWindow):
         message = f"任务 {task_id[:8]}... 文件 {file_path}: {error}"
         self.log_panel.append_error(message)
         self.status_bar.showMessage(f"错误: {message}", 5000)
+
+    def _on_task_warning(self, task_id: str, file_path: str, message: str):
+        """处理任务警告"""
+        self.log_panel.append_warning(f"任务 {task_id[:8]}... {file_path}: {message}")
 
     def _on_task_completed(self, task_id: str):
         """处理任务完成"""

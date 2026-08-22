@@ -11,6 +11,7 @@ from core.downloaders.local_strategy import LocalDirStrategy
 from core.downloaders.ms_downloader import ModelScopeDownloader
 from core.verifier import FileVerifier
 from core.workers import DownloadWorker, TransferWorker
+from core.server_profile import find as find_profile
 from core.transfers.rsync_transfer import RsyncTransfer
 
 
@@ -29,6 +30,7 @@ class TaskManager(QObject):
     task_state_changed = pyqtSignal(str, str)
     task_progress = pyqtSignal(str, str, int, int)
     task_error = pyqtSignal(str, str, str)
+    task_warning = pyqtSignal(str, str, str)
     task_completed = pyqtSignal(str)
 
     MAX_CONCURRENT_TASKS = 2
@@ -310,6 +312,20 @@ class TaskManager(QObject):
         else:
             self._complete_task(task_id)
 
+    def _build_transfer(self, task, profile=None) -> RsyncTransfer:
+        """按任务引用的 Server profile 构造传输器。
+
+        remote_host 为 profile name(自然键);空或查不到时回退默认
+        主机/用户,兼容未配置服务器与旧任务。profile 可由调用方预解析
+        并传入,避免 stage 内重复查询产生不一致快照。
+        """
+        server_name = task.remote_host or ""
+        if profile is None and server_name:
+            profile = find_profile(self._db, server_name)
+        if profile is not None:
+            return profile.to_transfer()
+        return RsyncTransfer(host="localhost", username="user")
+
     def _execute_transfer_stage(self, task_id: str) -> None:
         """执行传输阶段"""
         self._db.update_task_state(task_id, TaskState.TRANSFERRING.value)
@@ -328,11 +344,16 @@ class TaskManager(QObject):
         self._task_file_failed[task_id] = set()
         self._task_file_total[task_id] = len(files)
 
-        # 创建传输器
-        transfer = RsyncTransfer(
-            host=task.remote_host or "localhost",
-            username="user",
-        )
+        # 创建传输器:按任务引用的 Server profile 解析真实连接参数
+        server_name = task.remote_host or ""
+        profile = find_profile(self._db, server_name) if server_name else None
+        transfer = self._build_transfer(task, profile=profile)
+        if server_name and profile is None:
+            self.task_warning.emit(
+                task_id,
+                "server",
+                f"未找到服务器配置 {server_name!r},使用默认传输设置",
+            )
 
         for file_dict in files:
             local_path = Path(task.local_cache_dir) / file_dict['file_path']

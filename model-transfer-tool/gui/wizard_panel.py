@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from PyQt6.QtGui import QFont
 
+from core.server_profile import load_all
 from core.task_intake import TaskDraft, validate, DraftValidationError, resolve_strategy
 
 
@@ -52,6 +53,7 @@ class WizardPanel(QWidget):
         self.current_step = 0
         self._setup_ui()
         self._connect_signals()
+        self._load_server_profiles()
         self._load_settings()
 
     def _setup_ui(self):
@@ -255,7 +257,7 @@ class WizardPanel(QWidget):
 
         self.server_combo = QComboBox()
         self.server_combo.setEditable(True)
-        self.server_combo.addItems(["服务器 1", "服务器 2", "服务器 3"])
+        self.server_combo.setPlaceholderText("选择已保存的服务器")
         transfer_layout.addRow("目标服务器:", self.server_combo)
 
         self.target_dir_input = QLineEdit()
@@ -403,6 +405,18 @@ class WizardPanel(QWidget):
         self.retry_btn.clicked.connect(self._on_retry)
         self.export_btn.clicked.connect(self._on_export)
 
+    def _load_server_profiles(self):
+        """从数据库加载 Server profiles 填充服务器下拉"""
+        names = []
+        if self.db:
+            try:
+                names = [p.name for p in load_all(self.db)]
+            except Exception as e:
+                self.log_signal.emit(f"加载服务器配置失败: {str(e)}", "WARNING")
+        self._server_profile_names = names
+        self.server_combo.clear()
+        self.server_combo.addItems(names)
+
     def _load_settings(self):
         """从数据库加载设置"""
         if not self.db:
@@ -423,9 +437,9 @@ class WizardPanel(QWidget):
             if cache_dir:
                 self.cache_input.setText(cache_dir)
 
-            # 加载服务器选择
+            # 加载服务器选择(仅当该服务器仍是已保存的 profile)
             server = self.db.get_setting("wizard_server", "")
-            if server:
+            if server and server in getattr(self, "_server_profile_names", []):
                 self.server_combo.setCurrentText(server)
 
             # 加载目标目录

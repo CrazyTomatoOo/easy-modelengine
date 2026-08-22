@@ -15,6 +15,8 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QFont, QIcon
 
 from core.database import Database
+from core.server_profile import ServerProfile
+from core.transfers.rsync_transfer import RsyncTransfer
 from utils.crypto import SecureStorage
 
 
@@ -918,23 +920,41 @@ class ServerConfigDialog(QDialog):
     def _on_test_connection(self):
         config = self._get_config_by_id(self.selected_config_id)
         if not config:
+            QMessageBox.information(self, "测试连接", "请先选择一个服务器")
             return
-        
-        name = config.get('name', '未知')
-        host = config.get('host', '-')
-        port = config.get('port', 22)
-        username = config.get('username', '-')
-        auth_type = config.get('auth_type', 'password')
-        
-        auth_text = "密码认证" if auth_type == 'password' else "SSH密钥认证"
-        
-        info_text = (
-            f"正在测试连接...\n\n"
-            f"配置: {name}\n"
-            f"主机: {host}:{port}\n"
-            f"用户: {username}\n"
-            f"认证: {auth_text}\n\n"
-            f"注意: 连接测试功能需要安装 paramiko 库。"
-        )
-        
-        QMessageBox.information(self, "测试连接", info_text)
+
+        profile = ServerProfile.from_row(config)
+
+        if profile.auth_type == "password":
+            QMessageBox.information(
+                self,
+                "测试连接",
+                f"服务器 {profile.name}({profile.host}:{profile.port})\n\n"
+                "当前暂不支持密码认证的连接测试(候选 6:传输密码通道)。\n"
+                "请改用 SSH 密钥认证,或稍后版本再试。"
+            )
+            return
+
+        key_path = profile.ssh_key_path()
+        if not key_path:
+            QMessageBox.warning(
+                self,
+                "测试连接",
+                f"服务器 {profile.name}:无法获取 SSH 密钥路径(解密失败或未配置密钥)",
+            )
+            return
+
+        transfer = profile.to_transfer()
+        ok, message = transfer.check_connectivity()
+        if ok:
+            QMessageBox.information(
+                self,
+                "测试连接",
+                f"服务器 {profile.name}({profile.username}@{profile.host}:{profile.port})\n\n连接成功",
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "测试连接",
+                f"服务器 {profile.name}({profile.username}@{profile.host}:{profile.port})\n\n连接失败:\n{message}",
+            )
