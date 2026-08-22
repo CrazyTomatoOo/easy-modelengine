@@ -28,7 +28,8 @@ _Avoid_: file entry, file row
 四步引导面板——收集模型来源、版本、目标服务器等原始选择,最终发射 TaskDraft。
 _Avoid_: setup wizard, form
 
-**Server profile**:
+服务器连接配置——主机、端口、用户名、认证类型与加密凭据;以 `server_configs` 表持久化。wizard 的服务器下拉与 Task 传输阶段按 name 引用它;SSH 密钥认证走 rsync,密码认证走 SFTP 适配器(paramiko)。
+_Avoid_: server config, server settings
 服务器连接配置——主机、端口、用户名、认证类型与加密凭据;以 `server_configs` 表持久化。wizard 的服务器下拉与 Task 传输阶段按 name 引用它;SSH 密钥认证可用,密码认证待 rsync 密码通道(候选 6)。
 _Avoid_: server config, server settings
 
