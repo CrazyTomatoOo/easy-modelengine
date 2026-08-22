@@ -4,11 +4,10 @@ from typing import Callable
 from PyQt6.QtCore import QObject, pyqtSignal, QThreadPool, QRunnable
 
 from core.database import Database
+from core.proxy_config import load as load_proxy
 from core.task_config import TaskConfig, TaskType, TaskState, TaskFile
 from core.interfaces import FileInfo
-from core.downloaders.hf_downloader import HuggingFaceDownloader
-from core.downloaders.local_strategy import LocalDirStrategy
-from core.downloaders.ms_downloader import ModelScopeDownloader
+from core.task_intake import create_strategies
 from core.verifier import FileVerifier
 from core.workers import DownloadWorker, TransferWorker
 from core.server_profile import find as find_profile
@@ -105,22 +104,11 @@ class TaskManager(QObject):
             self._download_pool.start(runnable)
 
     def _create_downloader(self, model_source: str):
-        """根据模型源创建下载器，自动应用代理设置"""
-        # 从数据库读取代理设置
-        proxy = None
-        enable_proxy = self._db.get_setting("enable_proxy", "false")
-        if enable_proxy.lower() == "true":
-            http_proxy = self._db.get_setting("proxy_http", "")
-            https_proxy = self._db.get_setting("proxy_https", "")
-            proxy = https_proxy or http_proxy or None
-        
-        if model_source == "huggingface":
-            return HuggingFaceDownloader(proxy=proxy)
-        elif model_source == "modelscope":
-            return ModelScopeDownloader(proxy=proxy)
-        elif model_source == "local":
-            return LocalDirStrategy()
-        else:
+        """根据模型源创建下载器,自动应用代理设置(经统一策略构造)。"""
+        strategies = create_strategies(load_proxy(self._db))
+        try:
+            return strategies[model_source]
+        except KeyError:
             raise ValueError(f"不支持的模型源: {model_source}")
 
     def _execute_download_stage(self, task_id: str) -> None:

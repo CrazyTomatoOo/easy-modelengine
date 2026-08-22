@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 代理配置对话框模块
-用于配置 HTTP/HTTPS 代理及镜像源设置
+用于配置 HTTP/HTTPS 代理
 """
 
 from PyQt6.QtWidgets import (
@@ -12,17 +12,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from core.database import Database
-
+from core.proxy_config import ProxyConfig, ProxyValidationError, load, save
 
 class ProxyDialog(QDialog):
     """代理配置对话框"""
-
-    # 设置项的 key
-    KEY_ENABLE_PROXY = "enable_proxy"
-    KEY_PROXY_HTTP = "proxy_http"
-    KEY_PROXY_HTTPS = "proxy_https"
-    KEY_MIRROR_HF = "mirror_hf"
-    KEY_MIRROR_MS = "mirror_ms"
 
     def __init__(self, db: Database, parent=None):
         super().__init__(parent)
@@ -47,7 +40,7 @@ class ProxyDialog(QDialog):
         layout.addWidget(title)
 
         # 副标题
-        subtitle = QLabel("配置代理服务器和镜像源，以便在受限网络环境中下载模型")
+        subtitle = QLabel("配置代理服务器,以便在受限网络环境中下载模型")
         subtitle.setObjectName("subtitle")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setWordWrap(True)
@@ -74,24 +67,6 @@ class ProxyDialog(QDialog):
         proxy_layout.addRow("HTTPS 代理:", self.https_input)
 
         layout.addWidget(proxy_group)
-
-        # 镜像源设置分组
-        mirror_group = QGroupBox("镜像源")
-        mirror_layout = QFormLayout(mirror_group)
-        mirror_layout.setSpacing(12)
-        mirror_layout.setContentsMargins(16, 20, 16, 16)
-
-        # HuggingFace 镜像
-        self.hf_mirror_input = QLineEdit()
-        self.hf_mirror_input.setPlaceholderText("例如: https://hf-mirror.com")
-        mirror_layout.addRow("HuggingFace 镜像:", self.hf_mirror_input)
-
-        # ModelScope 镜像
-        self.ms_mirror_input = QLineEdit()
-        self.ms_mirror_input.setPlaceholderText("例如: https://modelscope.cn")
-        mirror_layout.addRow("ModelScope 镜像:", self.ms_mirror_input)
-
-        layout.addWidget(mirror_group)
 
         # 测试按钮
         self.test_btn = QPushButton("测试代理连接")
@@ -126,58 +101,34 @@ class ProxyDialog(QDialog):
 
     def _load_settings(self):
         """从数据库加载设置"""
-        enable_proxy = self.db.get_setting(self.KEY_ENABLE_PROXY, "false")
-        self.enable_checkbox.setChecked(enable_proxy.lower() == "true")
-
-        self.http_input.setText(self.db.get_setting(self.KEY_PROXY_HTTP, ""))
-        self.https_input.setText(self.db.get_setting(self.KEY_PROXY_HTTPS, ""))
-        self.hf_mirror_input.setText(self.db.get_setting(self.KEY_MIRROR_HF, ""))
-        self.ms_mirror_input.setText(self.db.get_setting(self.KEY_MIRROR_MS, ""))
+        config = load(self.db)
+        self.enable_checkbox.setChecked(config.enable)
+        self.http_input.setText(config.http)
+        self.https_input.setText(config.https)
 
         # 根据启用状态更新输入框可用性
         self._on_proxy_toggled(self.enable_checkbox.isChecked())
 
-    def _validate_inputs(self) -> bool:
-        """验证输入内容"""
-        if not self.enable_checkbox.isChecked():
-            return True
-
-        http_proxy = self.http_input.text().strip()
-        https_proxy = self.https_input.text().strip()
-
-        if http_proxy and not self._is_valid_proxy_url(http_proxy):
-            QMessageBox.warning(self, "输入错误", "HTTP 代理地址格式不正确")
-            self.http_input.setFocus()
-            return False
-
-        if https_proxy and not self._is_valid_proxy_url(https_proxy):
-            QMessageBox.warning(self, "输入错误", "HTTPS 代理地址格式不正确")
-            self.https_input.setFocus()
-            return False
-
-        return True
-
-    def _is_valid_proxy_url(self, url: str) -> bool:
-        """验证代理 URL 格式"""
-        if not url:
-            return True
-        return url.startswith(("http://", "https://", "socks5://"))
-
     def _save_settings(self):
-        """保存设置到数据库"""
-        if not self._validate_inputs():
+        """保存设置到数据库(校验委托 ProxyConfig)"""
+        config = ProxyConfig(
+            enable=self.enable_checkbox.isChecked(),
+            http=self.http_input.text().strip(),
+            https=self.https_input.text().strip(),
+        )
+
+        try:
+            config.validate()
+        except ProxyValidationError as e:
+            QMessageBox.warning(self, "输入错误", str(e))
+            if e.field == "http":
+                self.http_input.setFocus()
+            else:
+                self.https_input.setFocus()
             return
 
         try:
-            self.db.set_setting(
-                self.KEY_ENABLE_PROXY,
-                "true" if self.enable_checkbox.isChecked() else "false"
-            )
-            self.db.set_setting(self.KEY_PROXY_HTTP, self.http_input.text().strip())
-            self.db.set_setting(self.KEY_PROXY_HTTPS, self.https_input.text().strip())
-            self.db.set_setting(self.KEY_MIRROR_HF, self.hf_mirror_input.text().strip())
-            self.db.set_setting(self.KEY_MIRROR_MS, self.ms_mirror_input.text().strip())
-
+            save(self.db, config)
             self.accept()
         except Exception as e:
             QMessageBox.critical(self, "保存失败", f"保存设置时出错: {str(e)}")
@@ -214,6 +165,4 @@ class ProxyDialog(QDialog):
             "enable_proxy": self.enable_checkbox.isChecked(),
             "proxy_http": self.http_input.text().strip(),
             "proxy_https": self.https_input.text().strip(),
-            "mirror_hf": self.hf_mirror_input.text().strip(),
-            "mirror_ms": self.ms_mirror_input.text().strip(),
         }

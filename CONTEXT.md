@@ -33,5 +33,5 @@ _Avoid_: setup wizard, form
 _Avoid_: server config, server settings
 
 **Proxy**:
-下载代理配置——启用开关、http/https/socks5 地址、镜像开关;以键值对存在 app_settings。
+下载代理配置——启用开关、http/https 地址;以 `core/proxy_config.py` 的 **ProxyConfig** 类型化保存(load/save/校验);列表与下载阶段的策略构造共用它。镜像源配置(旧 mirror_hf/mirror_ms)已删除——从未有消费者。
 _Avoid_: network settings, mirror config

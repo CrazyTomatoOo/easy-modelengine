@@ -11,6 +11,26 @@ from modelscope.hub.file_download import model_file_download
 
 from core.interfaces import DownloadStrategy, FileInfo
 
+# ModelScope 经进程级 env 读代理;多 worker 并发设置会互相污染,串行化临界区。
+_MS_PROXY_LOCK = threading.Lock()
+
+
+def _set_proxy_env(proxy: str) -> tuple:
+    """设置代理 env,返回进入前的值以便恢复。"""
+    prev = (os.environ.get("HTTP_PROXY"), os.environ.get("HTTPS_PROXY"))
+    os.environ["HTTP_PROXY"] = proxy
+    os.environ["HTTPS_PROXY"] = proxy
+    return prev
+
+
+def _restore_proxy_env(prev: tuple) -> None:
+    """恢复进入前的 env(原值不存在则移除,不丢弃 ambient 变量)。"""
+    for key, value in (("HTTP_PROXY", prev[0]), ("HTTPS_PROXY", prev[1])):
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
 
 class ModelScopeDownloader(DownloadStrategy):
     def __init__(self, token: Optional[str] = None, cache_dir: Optional[Path] = None, proxy: Optional[str] = None):
@@ -81,27 +101,32 @@ class ModelScopeDownloader(DownloadStrategy):
                 monitor_thread.start()
 
             try:
-                # 设置代理环境变量（如果配置了）
-                if self.proxy:
-                    os.environ['HTTP_PROXY'] = self.proxy
-                    os.environ['HTTPS_PROXY'] = self.proxy
-                
                 cache_dir = str(self.cache_dir) if self.cache_dir else None
-                downloaded_path = model_file_download(
-                    model_id=model_id,
-                    file_path=file_info.path,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    local_dir=str(temp_dir),
-                )
+
+                def _call_download():
+                    return model_file_download(
+                        model_id=model_id,
+                        file_path=file_info.path,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        local_dir=str(temp_dir),
+                    )
+
+                with _MS_PROXY_LOCK:
+                    if self.proxy:
+                        # env 是进程级:设置→调用→恢复 全程持锁,避免并发 worker 互相覆盖
+                        prev_env = _set_proxy_env(self.proxy)
+                        try:
+                            downloaded_path = _call_download()
+                        finally:
+                            _restore_proxy_env(prev_env)
+                    else:
+                        # 无代理也进锁:避免在带代理任务的 env 窗口内执行
+                        downloaded_path = _call_download()
             finally:
                 stop_event.set()
                 if monitor_thread:
                     monitor_thread.join(timeout=2)
-                # 清理代理环境变量
-                if self.proxy:
-                    os.environ.pop('HTTP_PROXY', None)
-                    os.environ.pop('HTTPS_PROXY', None)
 
             if downloaded_path is None:
                 return False

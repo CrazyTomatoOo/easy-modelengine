@@ -12,6 +12,7 @@ from core.downloaders.hf_downloader import HuggingFaceDownloader
 from core.downloaders.local_strategy import LocalDirStrategy
 from core.downloaders.ms_downloader import ModelScopeDownloader
 from core.interfaces import DownloadStrategy
+from core.proxy_config import ProxyConfig
 from core.task_config import TaskConfig, TaskFile, TaskType
 
 
@@ -44,6 +45,20 @@ _DEFAULT_STRATEGIES: Mapping[str, DownloadStrategy] = {
     "modelscope": ModelScopeDownloader(),
     "local": LocalDirStrategy(),
 }
+
+
+def create_strategies(
+    proxy: Optional[ProxyConfig] = None,
+) -> Mapping[str, DownloadStrategy]:
+    """构造各来源的下载策略;代理开启时传递给远程源(列表与下载一致)。"""
+    if proxy is None or proxy.proxy_url() is None:
+        return dict(_DEFAULT_STRATEGIES)
+    url = proxy.proxy_url()
+    return {
+        "huggingface": HuggingFaceDownloader(proxy=url),
+        "modelscope": ModelScopeDownloader(proxy=url),
+        "local": LocalDirStrategy(),
+    }
 
 
 def resolve_strategy(

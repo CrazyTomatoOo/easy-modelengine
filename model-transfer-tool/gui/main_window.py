@@ -13,8 +13,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction
 
 from core.database import Database
+from core.proxy_config import load as load_proxy
 from core.task_manager import TaskManager
-from core.task_intake import TaskDraft, build
+from core.task_intake import TaskDraft, build, create_strategies
 from gui.wizard_panel import WizardPanel
 from gui.task_panel import TaskPanel
 from gui.log_panel import LogPanel
@@ -147,18 +148,12 @@ class MainWindow(QMainWindow):
             enable = settings.get("enable_proxy", False)
             http = settings.get("proxy_http", "")
             https = settings.get("proxy_https", "")
-            hf_mirror = settings.get("mirror_hf", "")
-            ms_mirror = settings.get("mirror_ms", "")
-            
+
             self.log_panel.append_success("代理设置已保存")
             if enable:
                 self.log_panel.append_info(f"代理已启用 - HTTP: {http or '未设置'}, HTTPS: {https or '未设置'}")
             else:
                 self.log_panel.append_info("代理已禁用")
-            if hf_mirror:
-                self.log_panel.append_info(f"HuggingFace 镜像: {hf_mirror}")
-            if ms_mirror:
-                self.log_panel.append_info(f"ModelScope 镜像: {ms_mirror}")
         else:
             self.log_panel.append_info("代理配置已取消")
 
@@ -246,7 +241,7 @@ class MainWindow(QMainWindow):
     def _on_task_created(self, draft: TaskDraft):
         """处理向导创建的任务——单次调用 Task intake,失败不创建"""
         try:
-            config = build(draft)
+            config = build(draft, strategies=create_strategies(load_proxy(self.db)))
             task_id = self.task_manager.create_task(config)
             self.task_panel.add_task(task_id, draft.model_id or "未知模型")
             self.log_panel.append_success(f"任务已创建: {task_id[:8]}...")
