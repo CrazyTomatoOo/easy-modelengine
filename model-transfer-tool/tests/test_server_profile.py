@@ -64,6 +64,30 @@ class TestFind:
         assert find(temp_db, "nope") is None
 
 
+class TestPassword:
+    def test_decrypts_password_for_password_auth(self, temp_db, monkeypatch):
+        _save(temp_db, auth_type="password")
+        monkeypatch.setattr(
+            SecureStorage, "decrypt",
+            classmethod(lambda cls, ciphertext, nonce, salt: "s3cret"),
+        )
+        profile = load_all(temp_db)[0]
+        assert profile.password() == "s3cret"
+
+    def test_ssh_key_auth_returns_none(self, temp_db):
+        _save(temp_db, auth_type="ssh_key")
+        assert load_all(temp_db)[0].password() is None
+
+    def test_decrypt_failure_returns_none(self, temp_db, monkeypatch):
+        _save(temp_db, auth_type="password")
+
+        def boom(cls, ciphertext, nonce, salt):
+            raise ValueError("bad")
+
+        monkeypatch.setattr(SecureStorage, "decrypt", classmethod(boom))
+        assert load_all(temp_db)[0].password() is None
+
+
 class TestSshKeyPath:
     def test_decrypts_key_path_for_ssh_key_auth(self, temp_db, monkeypatch):
         _save(temp_db)

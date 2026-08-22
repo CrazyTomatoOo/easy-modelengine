@@ -157,7 +157,10 @@ class MainWindow(QMainWindow):
         else:
             self.log_panel.append_info("代理配置已取消")
 
-    def _setup_backend(self):
+        """初始化后端组件(bootstrap 已保证目录存在)"""
+        db_path = Path(__file__).parent.parent / "data" / "tasks.db"
+
+        self.db = Database(str(db_path))
         """初始化后端组件"""
         db_path = Path(__file__).parent.parent / "data" / "tasks.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)

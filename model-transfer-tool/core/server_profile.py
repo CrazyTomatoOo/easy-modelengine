@@ -1,12 +1,14 @@
 """ServerProfile —— 服务器连接配置的类型化读取层(CONTEXT.md:Server profile)。
 
-wizard 下拉与 Task 传输阶段按 name 引用它;SSH 密钥认证可用,密码通道留候选 6。
+wizard 下拉与 Task 传输阶段按 name 引用它;SSH 密钥认证走 rsync,
+密码认证走 SFTP 适配器(paramiko)。
 """
 
 from dataclasses import dataclass
 from typing import Optional
 
 from core.database import Database
+from core.interfaces import TransferStrategy
 from core.transfers.rsync_transfer import RsyncTransfer
 from utils.crypto import SecureStorage
 
@@ -37,10 +39,8 @@ class ServerProfile:
             auth_salt=bytes(row["auth_salt"]),
         )
 
-    def ssh_key_path(self) -> Optional[str]:
-        """ssh_key 认证时解密密钥文件路径;password 认证或解密失败返回 None。"""
-        if self.auth_type != "ssh_key":
-            return None
+    def _decrypt_secret(self) -> Optional[str]:
+        """解密加密凭据;失败返回 None。"""
         try:
             nonce = self.encrypted_auth[: SecureStorage.NONCE_LENGTH]
             ciphertext = self.encrypted_auth[SecureStorage.NONCE_LENGTH:]
@@ -48,8 +48,29 @@ class ServerProfile:
         except Exception:
             return None
 
-    def to_transfer(self) -> RsyncTransfer:
-        """按本配置构造传输器(key 认证带解密密钥路径;password 认证无密钥)。"""
+    def ssh_key_path(self) -> Optional[str]:
+        """ssh_key 认证时解密密钥文件路径;password 认证或解密失败返回 None。"""
+        if self.auth_type != "ssh_key":
+            return None
+        return self._decrypt_secret()
+
+    def password(self) -> Optional[str]:
+        """password 认证时解密密码;ssh_key 认证或解密失败返回 None。"""
+        if self.auth_type != "password":
+            return None
+        return self._decrypt_secret()
+
+    def to_transfer(self) -> TransferStrategy:
+        """按认证类型构造传输器:password → SftpTransfer,ssh_key → RsyncTransfer。"""
+        if self.auth_type == "password":
+            from core.transfers.sftp_transfer import SftpTransfer
+
+            return SftpTransfer(
+                host=self.host,
+                username=self.username,
+                port=self.port,
+                password=self.password(),
+            )
         return RsyncTransfer(
             host=self.host,
             username=self.username,

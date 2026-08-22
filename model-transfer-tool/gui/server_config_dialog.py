@@ -16,7 +16,6 @@ from PyQt6.QtGui import QFont, QIcon
 
 from core.database import Database
 from core.server_profile import ServerProfile
-from core.transfers.rsync_transfer import RsyncTransfer
 from utils.crypto import SecureStorage
 
 
@@ -925,18 +924,7 @@ class ServerConfigDialog(QDialog):
 
         profile = ServerProfile.from_row(config)
 
-        if profile.auth_type == "password":
-            QMessageBox.information(
-                self,
-                "测试连接",
-                f"服务器 {profile.name}({profile.host}:{profile.port})\n\n"
-                "当前暂不支持密码认证的连接测试(候选 6:传输密码通道)。\n"
-                "请改用 SSH 密钥认证,或稍后版本再试。"
-            )
-            return
-
-        key_path = profile.ssh_key_path()
-        if not key_path:
+        if profile.auth_type == "ssh_key" and not profile.ssh_key_path():
             QMessageBox.warning(
                 self,
                 "测试连接",
@@ -958,3 +946,4 @@ class ServerConfigDialog(QDialog):
                 "测试连接",
                 f"服务器 {profile.name}({profile.username}@{profile.host}:{profile.port})\n\n连接失败:\n{message}",
             )
+
