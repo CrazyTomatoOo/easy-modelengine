@@ -203,7 +203,6 @@ class TestFileCRUD:
             task_id=task_id,
             file_path="model.bin",
             file_size=1024,
-            remote_url="https://example.com/model.bin",
             expected_hash="abc123"
         )
         

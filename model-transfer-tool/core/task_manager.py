@@ -169,7 +169,6 @@ class TaskManager(QObject):
             file_info = FileInfo(
                 path=file_dict['file_path'],
                 size=file_dict['file_size'],
-                url=file_dict.get('remote_url')
             )
             local_path = Path(task.local_cache_dir) / file_dict['file_path']
 

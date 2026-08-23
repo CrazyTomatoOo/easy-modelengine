@@ -1,4 +1,7 @@
-"""本地目录作为下载来源的策略适配器——『列表』=扫描目录,『下载』=复制。"""
+"""本地目录作为下载来源的策略适配器——『列表』=扫描目录,『下载』=复制。
+
+    seam 语义:list_files 的 model_id 实参为本地目录路径(域模型 TaskDraft 的本地重载),
+    revision 被忽略;本地源不产生源校验和(CONTEXT.md「源校验和」)。"""
 
 import os
 import shutil

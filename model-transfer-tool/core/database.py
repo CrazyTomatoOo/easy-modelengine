@@ -223,7 +223,6 @@ class Database:
         task_id: str,
         file_path: str,
         file_size: int,
-        remote_url: Optional[str] = None,
         expected_hash: Optional[str] = None,
         hash_algorithm: Optional[str] = None
     ) -> int:
@@ -231,11 +230,11 @@ class Database:
         conn = self._get_connection()
         cursor = conn.execute('''
             INSERT INTO task_files (
-                task_id, file_path, file_size, remote_url,
+                task_id, file_path, file_size,
                 expected_hash, hash_algorithm
-            ) VALUES (?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?)
         ''', (
-            task_id, file_path, file_size, remote_url,
+            task_id, file_path, file_size,
             expected_hash, hash_algorithm
         ))
         conn.commit()

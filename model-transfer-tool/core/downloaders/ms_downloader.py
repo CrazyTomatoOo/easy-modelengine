@@ -57,7 +57,7 @@ class ModelScopeDownloader(DownloadStrategy):
             path = file_info.get("Path", "")
             size = file_info.get("Size", 0)
             sha256 = file_info.get("Sha256") or file_info.get("sha256")
-            file_infos.append(FileInfo(path=path, size=size, url=None, expected_hash=sha256))
+            file_infos.append(FileInfo(path=path, size=size, expected_hash=sha256))
 
         return file_infos
 

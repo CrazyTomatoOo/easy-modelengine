@@ -8,7 +8,6 @@ from typing import Callable, Optional, Tuple
 class FileInfo:
     path: str
     size: int
-    url: Optional[str] = None
     expected_hash: Optional[str] = None
 
 
