@@ -10,6 +10,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QAction
 
+from gui.state_labels import TASK_STATE_PRESENTATION, Presentation
+
 
 class TaskItemWidget(QWidget):
     """自定义任务项控件，显示任务信息和进度条"""
@@ -18,7 +20,7 @@ class TaskItemWidget(QWidget):
         super().__init__(parent)
         self.task_id = task_id
         self.model_name = model_name
-        self._status = "等待中"
+        self._status_key = "pending"
         self._progress = 0
         self._setup_ui()
 
@@ -40,7 +42,7 @@ class TaskItemWidget(QWidget):
         self.model_label.setWordWrap(True)
         info_layout.addWidget(self.model_label)
 
-        self.status_label = QLabel(f"状态: {self._status}")
+        self.status_label = QLabel(f"状态: {self._status_key}")
         self.status_label.setStyleSheet("font-size: 11px; color: #666;")
         info_layout.addWidget(self.status_label)
 
@@ -54,24 +56,12 @@ class TaskItemWidget(QWidget):
         self.progress_bar.setFixedWidth(120)
         layout.addWidget(self.progress_bar)
 
-    def update_status(self, status):
-        """更新状态"""
-        self._status = status
-        self.status_label.setText(f"状态: {status}")
-
-        # 根据状态设置颜色
-        color_map = {
-            "等待中": "#666",
-            "下载中": "#0066cc",
-            "传输中": "#0066cc",
-            "校验中": "#0066cc",
-            "已暂停": "#ff9900",
-            "已完成": "#009900",
-            "失败": "#cc0000",
-            "已取消": "#999",
-        }
-        color = color_map.get(status, "#666")
-        self.status_label.setStyleSheet(f"font-size: 11px; color: {color};")
+    def update_status(self, status_key):
+        """按枚举 key 更新状态;标签与颜色查呈现注册表。"""
+        self._status_key = status_key
+        pres = TASK_STATE_PRESENTATION.get(status_key, Presentation(status_key, "#666"))
+        self.status_label.setText(f"状态: {pres.label}")
+        self.status_label.setStyleSheet(f"font-size: 11px; color: {pres.color};")
 
     def update_progress(self, progress):
         """更新进度"""
@@ -87,6 +77,11 @@ class TaskPanel(QWidget):
     cancel_task = pyqtSignal(str)
     retry_task = pyqtSignal(str)
     view_details = pyqtSignal(str)
+
+    # 键控逻辑用的状态集合:一律用枚举 key,不用译文
+    _PAUSABLE_KEYS = {"pending", "downloading", "transferring", "verifying"}
+    _RESUMABLE_KEYS = {"paused_dl", "paused_tx"}
+    _ACTIVE_KEYS = _PAUSABLE_KEYS | {"paused_dl", "paused_tx"}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -158,19 +153,9 @@ class TaskPanel(QWidget):
         self._filter = filter_type
         self._refresh_list()
 
-    def _get_status_category(self, status):
-        """获取状态分类"""
-        progress_statuses = ["等待中", "下载中", "传输中", "校验中", "已暂停"]
-        completed_statuses = ["已完成"]
-        failed_statuses = ["失败", "已取消"]
-
-        if status in progress_statuses:
-            return "进行中"
-        elif status in completed_statuses:
-            return "已完成"
-        elif status in failed_statuses:
-            return "失败"
-        return "全部"
+    def _get_status_category(self, status_key):
+        """获取状态分类(查呈现注册表,key 驱动)"""
+        return TASK_STATE_PRESENTATION.get(status_key, Presentation("", "")).category
 
     def _refresh_list(self):
         """根据过滤器刷新列表显示"""
@@ -184,8 +169,8 @@ class TaskPanel(QWidget):
             if task_id not in self._tasks:
                 continue
 
-            status = self._tasks[task_id].get("status", "等待中")
-            category = self._get_status_category(status)
+            status_key = self._tasks[task_id].get("status", "pending")
+            category = self._get_status_category(status_key)
 
             if self._filter == "全部" or category == self._filter:
                 item.setHidden(False)
@@ -203,22 +188,22 @@ class TaskPanel(QWidget):
             return
 
         task_id = widget.task_id
-        status = self._tasks.get(task_id, {}).get("status", "等待中")
+        status_key = self._tasks.get(task_id, {}).get("status", "pending")
 
         menu = QMenu(self)
 
         # 暂停/恢复
-        if status in ["等待中", "下载中", "传输中", "校验中"]:
+        if status_key in self._PAUSABLE_KEYS:
             pause_action = QAction("暂停", self)
             pause_action.triggered.connect(lambda: self.pause_task.emit(task_id))
             menu.addAction(pause_action)
-        elif status == "已暂停":
+        elif status_key in self._RESUMABLE_KEYS:
             resume_action = QAction("恢复", self)
             resume_action.triggered.connect(lambda: self.resume_task.emit(task_id))
             menu.addAction(resume_action)
 
         # 取消
-        if status not in ["已完成", "已取消"]:
+        if status_key not in ("completed", "cancelled"):
             cancel_action = QAction("取消", self)
             cancel_action.triggered.connect(lambda: self.cancel_task.emit(task_id))
             menu.addAction(cancel_action)
@@ -231,7 +216,7 @@ class TaskPanel(QWidget):
         menu.addAction(details_action)
 
         # 重试失败项
-        if status in ["失败", "已取消"]:
+        if status_key in ("failed", "cancelled"):
             retry_action = QAction("重试", self)
             retry_action.triggered.connect(lambda: self.retry_task.emit(task_id))
             menu.addAction(retry_action)
@@ -242,7 +227,7 @@ class TaskPanel(QWidget):
         """添加任务"""
         self._tasks[task_id] = {
             "model_name": model_name,
-            "status": "等待中",
+            "status": "pending",
             "progress": 0,
         }
 
@@ -257,19 +242,19 @@ class TaskPanel(QWidget):
 
         self._refresh_list()
 
-    def update_task_status(self, task_id, status):
-        """更新任务状态"""
+    def update_task_status(self, task_id, status_key):
+        """更新任务状态(入参为枚举 key,展示查呈现注册表)"""
         if task_id not in self._tasks:
             return
 
-        self._tasks[task_id]["status"] = status
+        self._tasks[task_id]["status"] = status_key
 
         # 找到对应的 widget 并更新
         for i in range(self.task_list.count()):
             item = self.task_list.item(i)
             widget = self.task_list.itemWidget(item)
             if widget is not None and widget.task_id == task_id:
-                widget.update_status(status)
+                widget.update_status(status_key)
                 break
 
         self._refresh_list()
@@ -305,7 +290,7 @@ class TaskPanel(QWidget):
     def _pause_all(self):
         """暂停所有可暂停的任务"""
         for task_id, task_info in self._tasks.items():
-            if task_info["status"] in ["等待中", "下载中", "传输中", "校验中"]:
+            if task_info["status"] in self._PAUSABLE_KEYS:
                 self.pause_task.emit(task_id)
 
     def _cancel_all(self):
@@ -316,13 +301,13 @@ class TaskPanel(QWidget):
         )
         if reply == QMessageBox.StandardButton.Yes:
             for task_id, task_info in list(self._tasks.items()):
-                if task_info["status"] not in ["已完成", "已取消"]:
+                if task_info["status"] not in ("completed", "cancelled"):
                     self.cancel_task.emit(task_id)
 
     def clear_completed(self):
         """清除已完成的任务"""
         for task_id in list(self._tasks.keys()):
-            if self._tasks[task_id]["status"] == "已完成":
+            if self._tasks[task_id]["status"] == "completed":
                 self.remove_task(task_id)
 
     def get_task_count(self):
@@ -331,15 +316,14 @@ class TaskPanel(QWidget):
 
     def get_active_task_count(self):
         """获取进行中任务数"""
-        active_statuses = ["等待中", "下载中", "传输中", "校验中", "已暂停"]
         return sum(
             1 for task in self._tasks.values()
-            if task["status"] in active_statuses
+            if task["status"] in self._ACTIVE_KEYS
         )
 
     def get_failed_task_count(self):
         """获取失败任务数"""
         return sum(
             1 for task in self._tasks.values()
-            if task["status"] in ["失败", "已取消"]
+            if task["status"] in ("failed", "cancelled")
         )

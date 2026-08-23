@@ -6,16 +6,10 @@ from PyQt6.QtWidgets import (
     QPushButton, QHeaderView, QLabel,
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 
+from gui.state_labels import STAGE_STATE_PRESENTATION
 
-_VERIFY_LABELS = {
-    "pending": "待校验",
-    "not_started": "未开始",
-    "in_progress": "校验中",
-    "completed": "通过",
-    "failed": "失败",
-    "skipped": "未校验",
-}
 
 _HINT = ("校验状态说明:通过=已按源校验和比对一致;未校验=该文件无源校验和"
          "(平台未提供哈希,不参与哈希比对);失败=哈希不匹配,损坏文件已删除。")
@@ -52,16 +46,14 @@ class TaskDetailsDialog(QDialog):
         table.verticalHeader().setVisible(False)
 
         for row, f in enumerate(files):
-            verify_label = _VERIFY_LABELS.get(f.get("verify_state"), f.get("verify_state") or "—")
+            pres = STAGE_STATE_PRESENTATION.get(f.get("verify_state"))
             table.setItem(row, 0, QTableWidgetItem(f["file_path"]))
             table.setItem(row, 1, QTableWidgetItem(str(f.get("file_size", ""))))
-            state_item = QTableWidgetItem(verify_label)
-            if verify_label == "失败":
-                state_item.setForeground(Qt.GlobalColor.red)
-            elif verify_label == "通过":
-                state_item.setForeground(Qt.GlobalColor.darkGreen)
-            elif verify_label == "未校验":
-                state_item.setForeground(Qt.GlobalColor.darkYellow)
+            state_item = QTableWidgetItem(
+                pres.label if pres else (f.get("verify_state") or "—")
+            )
+            if pres:
+                state_item.setForeground(QColor(pres.color))
             table.setItem(row, 2, state_item)
             table.setItem(row, 3, QTableWidgetItem(f.get("expected_hash") or "—"))
             table.setItem(row, 4, QTableWidgetItem(f.get("actual_hash") or "—"))

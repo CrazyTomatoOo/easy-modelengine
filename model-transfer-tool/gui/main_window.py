@@ -23,6 +23,7 @@ from gui.theme import ThemeManager
 from gui.server_config_dialog import ServerConfigDialog
 from gui.proxy_dialog import ProxyDialog
 from gui.task_details_dialog import TaskDetailsDialog
+from gui.state_labels import Presentation, TASK_STATE_PRESENTATION
 
 
 class MainWindow(QMainWindow):
@@ -203,20 +204,9 @@ class MainWindow(QMainWindow):
 
     def _on_task_state_changed(self, task_id: str, state: str):
         """处理任务状态变化"""
-        state_map = {
-            "pending": "等待中",
-            "downloading": "下载中",
-            "paused_dl": "已暂停",
-            "verifying": "校验中",
-            "transferring": "传输中",
-            "paused_tx": "已暂停",
-            "completed": "已完成",
-            "failed": "失败",
-            "cancelled": "已取消",
-        }
-        status_text = state_map.get(state, state)
-        self.task_panel.update_task_status(task_id, status_text)
-        self.log_panel.append_info(f"任务 {task_id[:8]}... 状态变更为: {status_text}")
+        pres = TASK_STATE_PRESENTATION.get(state, Presentation(state, "#666666"))
+        self.task_panel.update_task_status(task_id, state)  # key 驱动,显示查注册表
+        self.log_panel.append_info(f"任务 {task_id[:8]}... 状态变更为: {pres.label}")
 
     def _on_task_progress(self, task_id: str, file_path: str, current: int, total: int):
         """处理任务进度更新"""
