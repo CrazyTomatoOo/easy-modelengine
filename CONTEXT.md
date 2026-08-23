@@ -21,8 +21,16 @@ core 中的深层模块——把 TaskDraft 变成 TaskConfig:校验、本地目�
 _Avoid_: task builder, task service, task handler
 
 **TaskFile**:
-Task 内单个文件的元数据——路径、大小、期望哈希、各阶段(下载/校验/传输)状态与进度。
+Task 内单个文件的元数据——路径、大小、期望哈希、各阶段(下载/校验/传输)状态与进度。校验状态显式区分「通过」与「未校验」:无源校验和的文件标为未校验,不做哈希比对,绝不静默当作通过。
 _Avoid_: file entry, file row
+
+**源校验和**:
+平台在文件元数据中提供的期望哈希——HuggingFace LFS 为 sha256,ModelScope 为 Sha256;有它才能做哈希校验,无它则该文件「未校验」。本地目录不属任何平台,永远没有源校验和,其完整性靠传输侧保证(远程校验,以本地实时哈希为期望)。
+_Avoid_: expected hash(实现层字段名),checksum
+
+**远程校验**:
+传输阶段完成后对远端副本的哈希比对(sha256sum 回读),失败即任务 FAILED(远端残件保留,rsync 可续传复用)。本地源无源校验和,以本地文件实时哈希为期望值——语义是「远端副本与本地源一致」,而非平台背书。
+_Avoid_: server check, remote checksum
 
 **wizard**:
 四步引导面板——收集模型来源、版本、目标服务器等原始选择,最终发射 TaskDraft。

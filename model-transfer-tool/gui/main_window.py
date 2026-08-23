@@ -22,6 +22,7 @@ from gui.log_panel import LogPanel
 from gui.theme import ThemeManager
 from gui.server_config_dialog import ServerConfigDialog
 from gui.proxy_dialog import ProxyDialog
+from gui.task_details_dialog import TaskDetailsDialog
 
 
 class MainWindow(QMainWindow):
@@ -157,6 +158,7 @@ class MainWindow(QMainWindow):
         else:
             self.log_panel.append_info("代理配置已取消")
 
+    def _setup_backend(self):
         """初始化后端组件(bootstrap 已保证目录存在)"""
         db_path = Path(__file__).parent.parent / "data" / "tasks.db"
 
@@ -192,6 +194,12 @@ class MainWindow(QMainWindow):
         self.task_panel.pause_task.connect(self._on_pause_task)
         self.task_panel.resume_task.connect(self._on_resume_task)
         self.task_panel.cancel_task.connect(self._on_cancel_task)
+        self.task_panel.view_details.connect(self._on_view_details)
+
+    def _on_view_details(self, task_id: str):
+        """打开任务详情对话框——文件级校验状态"""
+        dialog = TaskDetailsDialog(self.db, task_id, self)
+        dialog.exec()
 
     def _on_task_state_changed(self, task_id: str, state: str):
         """处理任务状态变化"""

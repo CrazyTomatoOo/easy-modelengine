@@ -5,6 +5,7 @@ from typing import Optional, Callable
 from PyQt6.QtCore import QObject, pyqtSignal, QRunnable
 
 from core.interfaces import DownloadStrategy, FileInfo, TransferStrategy
+from core.verifier import FileVerifier
 
 
 class WorkerSignals(QObject):
@@ -105,6 +106,8 @@ class TransferWorker(QRunnable):
         transfer: TransferStrategy,
         local_path: Path,
         remote_path: str,
+        expected_hash: Optional[str] = None,
+        hash_algorithm: str = "sha256",
     ):
         super().__init__()
         self.task_id = task_id
@@ -112,6 +115,8 @@ class TransferWorker(QRunnable):
         self.transfer = transfer
         self.local_path = Path(local_path)
         self.remote_path = remote_path
+        self.expected_hash = expected_hash
+        self.hash_algorithm = hash_algorithm
         self.signals = WorkerSignals()
         self._cancelled = False
         self.done_event = threading.Event()
@@ -144,11 +149,39 @@ class TransferWorker(QRunnable):
                 return
 
             if success:
-                self.signals.finished.emit(
-                    self.task_id,
-                    self.file_path,
-                    True,
-                )
+                # 传输后远程校验:期望值来自源校验和;本地源无源校验和,取本地实时哈希
+                expected = self.expected_hash
+                try:
+                    if not expected:
+                        expected = FileVerifier.compute_hash(
+                            self.local_path, self.hash_algorithm
+                        )
+                    remote_ok = self.transfer.verify_remote_checksum(
+                        remote_path=self.remote_path,
+                        expected_hash=expected,
+                        algorithm=self.hash_algorithm,
+                    )
+                except Exception as e:
+                    self.signals.error.emit(
+                        self.task_id,
+                        self.file_path,
+                        f"远程校验错误: {str(e)}",
+                    )
+                    return
+
+                if remote_ok:
+                    self.signals.finished.emit(
+                        self.task_id,
+                        self.file_path,
+                        True,
+                    )
+                else:
+                    # 远端校验失败:本地文件完好,任务失败,远端残件保留(rsync 可续传)
+                    self.signals.error.emit(
+                        self.task_id,
+                        self.file_path,
+                        "远程校验失败：远端哈希与期望不符",
+                    )
             else:
                 self.signals.error.emit(
                     self.task_id,

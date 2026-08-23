@@ -176,6 +176,10 @@ class TestFailurePropagation:
             def transfer_file(self, local_path, remote_path, progress_callback=None):
                 return True
 
+            def verify_remote_checksum(self, remote_path, expected_hash, algorithm):
+                return True
+
+
         manager._build_transfer = lambda task, profile=None: OkTransfer()
 
         task_id = manager.create_task(_config(
@@ -189,3 +193,74 @@ class TestFailurePropagation:
         task = manager._db.get_task(task_id)
         # 真实校验通过后进入 transfer(无文件阶段空转例外)或完成;绝不 FAILED
         assert task.state != "failed"
+
+class TestVerifyIntegrity:
+    """权重完整性校验语义:DOWLOAD_ONLY 也校验、结果落库、未校验显式化、失败删损坏文件。"""
+
+    def _hashed_config(self, cache, digest=None):
+        return _config(
+            task_type=TaskType.DOWNLOAD_ONLY,
+            files=[TaskFile(
+                file_path="a.bin",
+                file_size=8,
+                expected_hash=digest or "x" * 64,
+                hash_algorithm="sha256",
+            )],
+            cache=cache,
+        )
+
+    def test_verify_writes_state_and_hash(self, manager, tmp_path):
+        import hashlib
+
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        data = b"good-data"
+        (cache / "a.bin").write_bytes(data)
+        digest = hashlib.sha256(data).hexdigest()
+
+        task_id = manager.create_task(self._hashed_config(cache, digest=digest))
+        manager._execute_verify_stage(task_id)
+        _settle(manager)
+
+        row = manager._db.get_task_files(task_id)[0]
+        assert row["verify_state"] == "completed"
+        assert row["actual_hash"] == digest
+        assert manager._db.get_task(task_id).state == "completed"
+
+    def test_verify_mismatch_deletes_corrupt_file(self, manager, tmp_path):
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        bad = cache / "a.bin"
+        bad.write_bytes(b"corrupted")
+
+        task_id = manager.create_task(self._hashed_config(cache))
+        manager._execute_verify_stage(task_id)
+        _settle(manager)
+
+        assert manager._db.get_task(task_id).state == "failed"
+        assert not bad.exists(), "损坏文件必须被删除,防止恢复按大小跳过"
+
+    def test_unverifiable_marked_skipped(self, manager, tmp_path):
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        (cache / "a.bin").write_bytes(b"x")
+
+        task_id = manager.create_task(_config(task_type=TaskType.DOWNLOAD_ONLY, cache=cache))
+        manager._execute_verify_stage(task_id)
+        _settle(manager)
+
+        row = manager._db.get_task_files(task_id)[0]
+        assert row["verify_state"] == "skipped"
+        assert manager._db.get_task(task_id).state == "completed"
+
+    def test_download_only_now_verifies(self, manager, tmp_path):
+        """DOWNLOAD_ONLY 下载后也进校验:坏哈希 → FAILED(旧行为直接完成)。"""
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        (cache / "a.bin").write_bytes(b"bad")
+
+        task_id = manager.create_task(self._hashed_config(cache))
+        manager._execute_download_stage(task_id)
+        _settle(manager)
+
+        assert manager._db.get_task(task_id).state == "failed"

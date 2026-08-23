@@ -166,3 +166,34 @@ class TestProxySerialization:
 
         assert result is False
         assert os.environ.get("HTTP_PROXY") is None
+
+class TestSha256Listing:
+    """list_files 必须把 ModelScope 元数据里的 Sha256 带进 expected_hash。"""
+
+    class _FakeApi:
+        def __init__(self, files):
+            self._files = files
+
+        def get_model_files(self, model_id, revision, recursive=True):
+            return self._files
+
+    def test_list_files_carries_sha256(self):
+        d = ModelScopeDownloader()
+        d.api = self._FakeApi([
+            {"Path": "model.safetensors", "Size": 10, "Type": "blob", "Sha256": "a" * 64},
+            {"Path": "config.json", "Size": 5, "Type": "blob"},
+        ])
+        files = d.list_files("org/m", "main")
+        assert files[0].expected_hash == "a" * 64
+        assert files[0].path == "model.safetensors"
+        assert files[1].expected_hash is None
+
+    def test_list_files_skips_tree_entries(self):
+        d = ModelScopeDownloader()
+        d.api = self._FakeApi([
+            {"Path": "subdir", "Size": 0, "Type": "tree"},
+            {"Path": "subdir/a.bin", "Size": 4, "Type": "blob", "Sha256": "b" * 64},
+        ])
+        files = d.list_files("org/m", "main")
+        assert [f.path for f in files] == ["subdir/a.bin"]
+        assert files[0].expected_hash == "b" * 64

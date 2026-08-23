@@ -39,8 +39,3 @@ class LocalDirStrategy(DownloadStrategy):
         if progress_callback:
             progress_callback(file_info.size, file_info.size)
         return True
-
-    def get_checksum(
-        self, model_id: str, revision: str, file_path: str
-    ) -> Optional[tuple[str, str]]:
-        return None

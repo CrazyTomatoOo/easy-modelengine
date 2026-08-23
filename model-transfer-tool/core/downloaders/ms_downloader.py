@@ -4,7 +4,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional
 
 from modelscope.hub.api import HubApi
 from modelscope.hub.file_download import model_file_download
@@ -56,7 +56,8 @@ class ModelScopeDownloader(DownloadStrategy):
                 continue
             path = file_info.get("Path", "")
             size = file_info.get("Size", 0)
-            file_infos.append(FileInfo(path=path, size=size, url=None))
+            sha256 = file_info.get("Sha256") or file_info.get("sha256")
+            file_infos.append(FileInfo(path=path, size=size, url=None, expected_hash=sha256))
 
         return file_infos
 
@@ -164,8 +165,3 @@ class ModelScopeDownloader(DownloadStrategy):
                         shutil.rmtree(temp_dir, ignore_errors=True)
                 except Exception:
                     pass
-
-    def get_checksum(
-        self, model_id: str, revision: str, file_path: str
-    ) -> Optional[Tuple[str, str]]:
-        return None

@@ -20,12 +20,8 @@ class FakeStrategy(DownloadStrategy):
     def list_files(self, model_id, revision):
         self.list_calls.append((model_id, revision))
         return self.files
-
     def download_file(self, model_id, revision, file_info, local_path, progress_callback=None):
         return True
-
-    def get_checksum(self, model_id, revision, file_path):
-        return None
 
 
 STRATEGIES = {

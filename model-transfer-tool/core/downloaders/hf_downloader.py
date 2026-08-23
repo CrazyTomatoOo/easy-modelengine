@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional
 
 import requests
 from huggingface_hub import HfApi
@@ -87,17 +87,3 @@ class HuggingFaceDownloader(DownloadStrategy):
 
         except Exception:
             return False
-
-    def get_checksum(
-        self, model_id: str, revision: str, file_path: str
-    ) -> Optional[Tuple[str, str]]:
-        try:
-            file_info = self.api.file_metadata(
-                repo_id=model_id, filename=file_path, revision=revision
-            )
-            blob_id = getattr(file_info, "blob_id", None)
-            if blob_id:
-                return ("sha256", blob_id)
-            return None
-        except Exception:
-            return None

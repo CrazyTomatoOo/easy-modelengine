@@ -5,7 +5,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, QThreadPool, QRunnable
 
 from core.database import Database
 from core.proxy_config import load as load_proxy
-from core.task_config import TaskConfig, TaskType, TaskState, TaskFile
+from core.task_config import TaskConfig, TaskType, TaskState, TaskFile, StageState
 from core.interfaces import FileInfo
 from core.task_intake import create_strategies
 from core.verifier import FileVerifier
@@ -265,12 +265,9 @@ class TaskManager(QObject):
 
         task_type = TaskType(task.task_type)
 
-        if task_type == TaskType.DOWNLOAD_ONLY:
-            self._complete_task(task_id)
-        else:
-            # FULL_PIPELINE 进入验证阶段
-            runnable = StageRunnable(self, task_id, self._execute_verify_stage)
-            self._verify_pool.start(runnable)
+        # 所有含下载的任务(DOWNLOAD_ONLY / FULL_PIPELINE)都进校验阶段
+        runnable = StageRunnable(self, task_id, self._execute_verify_stage)
+        self._verify_pool.start(runnable)
 
     def _execute_verify_stage(self, task_id: str) -> None:
         """执行校验阶段"""
@@ -290,6 +287,7 @@ class TaskManager(QObject):
         all_verified = True
         for file_dict in files:
             local_path = Path(task.local_cache_dir) / file_dict['file_path']
+            file_id = file_dict.get('id')
 
             if not local_path.exists():
                 self.task_error.emit(
@@ -297,40 +295,63 @@ class TaskManager(QObject):
                     file_dict['file_path'],
                     "文件不存在，无法校验"
                 )
+                if file_id is not None:
+                    self._db.update_file_state(
+                        file_id=file_id,
+                        verify_state=StageState.FAILED.value,
+                    )
                 all_verified = False
                 continue
 
             expected_hash = file_dict.get('expected_hash')
             hash_algorithm = file_dict.get('hash_algorithm', 'sha256')
 
-            if expected_hash and hash_algorithm:
-                try:
-                    verified = FileVerifier.verify(
-                        file_path=local_path,
-                        expected_hash=expected_hash,
-                        algorithm=hash_algorithm,
+            if not expected_hash or not hash_algorithm:
+                # 无源校验和:显式标记「未校验」,不静默当作通过
+                if file_id is not None:
+                    self._db.update_file_state(
+                        file_id=file_id,
+                        verify_state=StageState.SKIPPED.value,
                     )
-                    if verified:
-                        self.task_progress.emit(
-                            task_id,
-                            file_dict['file_path'],
-                            file_dict['file_size'],
-                            file_dict['file_size']
-                        )
-                    else:
-                        self.task_error.emit(
-                            task_id,
-                            file_dict['file_path'],
-                            "校验失败：哈希值不匹配"
-                        )
-                        all_verified = False
-                except Exception as e:
+                continue
+
+            try:
+                actual_hash = FileVerifier.compute_hash(local_path, hash_algorithm)
+                verified = actual_hash.lower() == expected_hash.lower()
+                if file_id is not None:
+                    self._db.update_file_state(
+                        file_id=file_id,
+                        verify_state=(
+                            StageState.COMPLETED.value if verified else StageState.FAILED.value
+                        ),
+                        actual_hash=actual_hash,
+                    )
+                if verified:
+                    self.task_progress.emit(
+                        task_id,
+                        file_dict['file_path'],
+                        file_dict['file_size'],
+                        file_dict['file_size']
+                    )
+                else:
                     self.task_error.emit(
                         task_id,
                         file_dict['file_path'],
-                        f"校验错误: {str(e)}"
+                        "校验失败：哈希值不匹配,已删除损坏文件"
                     )
                     all_verified = False
+                    # 删除损坏缓存,避免恢复逻辑按大小跳过使坏文件永久滞留
+                    try:
+                        local_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            except Exception as e:
+                self.task_error.emit(
+                    task_id,
+                    file_dict['file_path'],
+                    f"校验错误: {str(e)}"
+                )
+                all_verified = False
 
         if all_verified:
             self._on_verify_stage_complete(task_id)
@@ -506,7 +527,10 @@ class TaskManager(QObject):
                 transfer=transfer,
                 local_path=local_path,
                 remote_path=remote_path,
+                expected_hash=file_dict.get('expected_hash'),
+                hash_algorithm=file_dict.get('hash_algorithm') or 'sha256',
             )
+
 
             worker.signals.progress.connect(self._on_transfer_progress)
             worker.signals.finished.connect(self._on_transfer_file_finished)

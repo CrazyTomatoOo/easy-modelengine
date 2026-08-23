@@ -162,6 +162,7 @@ class TestTaskExecution:
         task_id = task_manager.create_task(config)
         
         task_manager._execute_download_stage(task_id)
+        task_manager._verify_pool.waitForDone(5000)
         
         task = task_manager._db.get_task(task_id)
         assert task.state == "completed"
@@ -242,11 +243,14 @@ class TestTaskSignals:
             model_source="huggingface",
             model_id="bert-base-uncased"
         )
-        task_id = task_manager.create_task(config)
-        
+        # create_task 即调度进线程池;spy 须先挂接,避免漏掉异步完成信号
         spy = QSignalSpy(task_manager.task_completed)
-        task_manager._execute_download_stage(task_id)
-        
+        task_id = task_manager.create_task(config)
+
+        task_manager._download_pool.waitForDone(5000)
+        task_manager._verify_pool.waitForDone(5000)
+        qtbot.wait(200)
+
         assert len(spy) == 1
         assert spy[0][0] == task_id
     
@@ -317,7 +321,9 @@ class TestTaskScheduling:
             tid = task_manager.create_task(config)
             task_ids.append(tid)
         
-        # All tasks should be completed (synchronous execution)
+        # 下载与校验均为线程池异步,等待两池结束再断言
+        task_manager._download_pool.waitForDone(5000)
+        task_manager._verify_pool.waitForDone(5000)
         for tid in task_ids:
             task = task_manager._db.get_task(tid)
             assert task.state == "completed"

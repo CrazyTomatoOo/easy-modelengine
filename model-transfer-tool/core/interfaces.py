@@ -28,12 +28,6 @@ class DownloadStrategy(ABC):
     ) -> bool:
         pass
 
-    @abstractmethod
-    def get_checksum(
-        self, model_id: str, revision: str, file_path: str
-    ) -> Optional[Tuple[str, str]]:
-        pass
-
 
 class TransferStrategy(ABC):
     @abstractmethod
