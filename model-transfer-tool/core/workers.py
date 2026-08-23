@@ -202,3 +202,89 @@ class TransferWorker(QRunnable):
     def cancel(self):
         """取消传输任务"""
         self._cancelled = True
+
+class VerifyWorker(QRunnable):
+    """校验工作线程——按源校验和做全文件哈希比对。
+
+    只算不写(Q5B):结果经 result 属性暴露,由 TaskManager 回写数据库;
+    哈希不匹配时删除损坏文件(恢复逻辑按大小跳过,坏文件不得滞留)。
+    """
+
+    def __init__(
+        self,
+        task_id: str,
+        file_path: str,
+        local_path: Path,
+        expected_hash: str,
+        hash_algorithm: str = "sha256",
+    ):
+        super().__init__()
+        self.task_id = task_id
+        self.file_path = file_path
+        self.local_path = Path(local_path)
+        self.expected_hash = expected_hash
+        self.hash_algorithm = hash_algorithm
+        self.actual_hash: Optional[str] = None
+        self.signals = WorkerSignals()
+        self._cancelled = False
+        self.done_event = threading.Event()
+
+    def run(self):
+        """执行校验任务"""
+        if self._cancelled:
+            self.done_event.set()
+            return
+
+        try:
+            size = self.local_path.stat().st_size if self.local_path.exists() else 0
+            self.actual_hash = FileVerifier.compute_hash(
+                self.local_path, self.hash_algorithm
+            )
+            if self._cancelled:
+                return
+
+            verified = self.actual_hash.lower() == self.expected_hash.lower()
+            if verified:
+                self.signals.progress.emit(
+                    self.task_id,
+                    self.file_path,
+                    size,
+                    size,
+                )
+                self.signals.finished.emit(
+                    self.task_id,
+                    self.file_path,
+                    True,
+                )
+            else:
+                # 删除损坏缓存,避免恢复按大小跳过使坏文件永久滞留
+                try:
+                    self.local_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                self.signals.error.emit(
+                    self.task_id,
+                    self.file_path,
+                    "校验失败：哈希值不匹配,已删除损坏文件",
+                )
+
+        except FileNotFoundError:
+            if not self._cancelled:
+                self.signals.error.emit(
+                    self.task_id,
+                    self.file_path,
+                    "文件不存在，无法校验",
+                )
+        except Exception as e:
+            if not self._cancelled:
+                self.signals.error.emit(
+                    self.task_id,
+                    self.file_path,
+                    f"校验错误: {str(e)}",
+                )
+        finally:
+            self.done_event.set()
+
+    def cancel(self):
+        """取消校验任务"""
+        self._cancelled = True

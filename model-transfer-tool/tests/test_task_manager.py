@@ -64,12 +64,8 @@ def task_manager(temp_db):
     
     yield manager
     
-    # Clear task tracking state to prevent signal processing during cleanup
-    manager._task_file_total.clear()
-    manager._task_file_completed.clear()
-    manager._task_file_failed.clear()
-    manager._active_download_workers.clear()
-    manager._active_transfer_workers.clear()
+    # Clear stage engine state to prevent signal processing during cleanup
+    manager._engines.clear()
     
     # Wait for all thread pools to finish
     manager._download_pool.waitForDone(5000)

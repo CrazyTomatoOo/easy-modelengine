@@ -61,11 +61,7 @@ def manager(temp_db):
     m._start_task = sync_start
     yield m
 
-    m._task_file_total.clear()
-    m._task_file_completed.clear()
-    m._task_file_failed.clear()
-    m._active_download_workers.clear()
-    m._active_transfer_workers.clear()
+    m._engines.clear()
     gate.set()  # 先放行残留 worker,再等待,避免超时
     m._download_pool.waitForDone(5000)
     m._transfer_pool.waitForDone(5000)

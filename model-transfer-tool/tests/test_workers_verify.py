@@ -8,7 +8,7 @@ import pytest
 from PyQt6.QtCore import QCoreApplication
 
 from core.interfaces import TransferStrategy
-from core.workers import TransferWorker
+from core.workers import TransferWorker, VerifyWorker
 
 
 @pytest.fixture(scope="module")
@@ -143,3 +143,56 @@ class TestRemoteVerify:
 
         assert transfer.verify_calls == []
         assert h.errors and "传输失败" in h.errors[0][2]
+
+class TestVerifyWorker:
+    """校验 worker:只算不写(Q5B),失配删除损坏文件。"""
+
+    def _run(self, worker, harness):
+        worker.signals.finished.connect(harness.on_finished)
+        worker.signals.error.connect(harness.on_error)
+        worker.run()
+        assert harness.done.wait(5)
+
+    def test_match_emits_finished_with_hash(self, tmp_path):
+        import hashlib
+
+        local = tmp_path / "a.bin"
+        data = b"good-data"
+        local.write_bytes(data)
+        digest = hashlib.sha256(data).hexdigest()
+        worker = VerifyWorker("t1", "a.bin", local, digest)
+        h = _Harness()
+        self._run(worker, h)
+
+        assert h.finished == [("t1", "a.bin", True)]
+        assert worker.actual_hash == digest
+
+    def test_mismatch_deletes_corrupt_file(self, tmp_path):
+        local = tmp_path / "a.bin"
+        local.write_bytes(b"corrupted")
+        worker = VerifyWorker("t1", "a.bin", local, "x" * 64)
+        h = _Harness()
+        self._run(worker, h)
+
+        assert not h.finished
+        assert h.errors and "校验失败" in h.errors[0][2]
+        assert not local.exists(), "哈希不匹配必须删除损坏文件"
+
+    def test_missing_file_errors(self, tmp_path):
+        worker = VerifyWorker("t1", "missing.bin", tmp_path / "missing.bin", "x" * 64)
+        h = _Harness()
+        self._run(worker, h)
+
+        assert not h.finished
+        assert h.errors and "文件不存在" in h.errors[0][2]
+
+    def test_cancel_emits_nothing(self, tmp_path):
+        local = tmp_path / "a.bin"
+        local.write_bytes(b"data")
+        worker = VerifyWorker("t1", "a.bin", local, "x" * 64)
+        worker.cancel()
+        h = _Harness()
+        worker.run()
+
+        assert not h.finished
+        assert not h.errors
