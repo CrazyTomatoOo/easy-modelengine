@@ -1,9 +1,11 @@
 import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 from core.interfaces import TransferStrategy
+from core.remote_shell import RemoteShell, SSHProcessConnector
 
 
 class RsyncTransfer(TransferStrategy):
@@ -20,6 +22,16 @@ class RsyncTransfer(TransferStrategy):
         self.port = port
         self.password = password
         self.ssh_key = ssh_key
+        # 校验/连通性委托 RemoteShell(Q1A):rsync 只管传输
+        self._shell = RemoteShell(self._build_connector())
+
+    def _build_connector(self) -> SSHProcessConnector:
+        return SSHProcessConnector(
+            host=self.host,
+            username=self.username,
+            port=self.port,
+            ssh_key=self.ssh_key,
+        )
 
     def _build_rsync_cmd(
         self, local_path: Path, remote_path: str, progress: bool = False
@@ -32,7 +44,8 @@ class RsyncTransfer(TransferStrategy):
             ssh_opts += f" -i {self.ssh_key}"
         cmd.extend(['-e', f'ssh {ssh_opts}'])
         cmd.append(str(local_path))
-        cmd.append(f"{self.username}@{self.host}:{remote_path}")
+        # 远端目标引用:注入面修复(Q1A)
+        cmd.append(f"{self.username}@{self.host}:{shlex.quote(remote_path)}")
         return cmd
 
     def transfer_file(
@@ -71,74 +84,7 @@ class RsyncTransfer(TransferStrategy):
     def verify_remote_checksum(
         self, remote_path: str, expected_hash: str, algorithm: str
     ) -> bool:
-        if algorithm not in ('sha256', 'md5'):
-            return False
-
-        cmd = self._build_ssh_cmd(algorithm, remote_path)
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode != 0:
-                return False
-
-            output = result.stdout.strip()
-            parts = output.split()
-            if not parts:
-                return False
-
-            remote_hash = parts[0]
-            return remote_hash.lower() == expected_hash.lower()
-        except Exception:
-            return False
+        return self._shell.verify_checksum(remote_path, expected_hash, algorithm)
 
     def check_connectivity(self) -> Tuple[bool, str]:
-        cmd = [
-            'ssh',
-            '-o',
-            'ConnectTimeout=5',
-            '-o',
-            'BatchMode=yes',
-            '-p',
-            str(self.port),
-        ]
-        if self.ssh_key:
-            cmd.extend(['-i', self.ssh_key])
-        cmd.append(f'{self.username}@{self.host}')
-        cmd.append('echo ok')
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0 and 'ok' in result.stdout:
-                return True, 'Connected successfully'
-            return False, result.stderr.strip() or 'Connection failed'
-        except subprocess.TimeoutExpired:
-            return False, 'Connection timed out'
-        except Exception as e:
-            return False, str(e)
-
-    def _build_ssh_cmd(self, algorithm: str, remote_path: str) -> list[str]:
-        hash_cmd = 'sha256sum' if algorithm == 'sha256' else 'md5sum'
-        cmd = [
-            'ssh',
-            '-o',
-            'ConnectTimeout=5',
-            '-p',
-            str(self.port),
-        ]
-        if self.ssh_key:
-            cmd.extend(['-i', self.ssh_key])
-        cmd.extend([
-            f'{self.username}@{self.host}',
-            f'{hash_cmd} {remote_path}',
-        ])
-        return cmd
+        return self._shell.check_connectivity()

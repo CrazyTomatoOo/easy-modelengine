@@ -110,41 +110,61 @@ class TestTransferFile:
 
         _attach(TRANSFER, BoomClient(), monkeypatch)
         assert TRANSFER.transfer_file(src, "/m/a.bin") is False
+class FakeConnector:
+    """远程 shell seam 的测试替身:记录命令,零网络。"""
+
+    def __init__(self, rc=0, output="", error=None):
+        self.rc = rc
+        self.output = output
+        self.error = error
+        self.commands = []
+
+    def exec(self, remote_command):
+        self.commands.append(remote_command)
+        if self.error:
+            raise self.error
+        return self.rc, self.output
+
+
+def _attach_shell(transfer, connector, monkeypatch):
+    """注入 RemoteShell seam:校验/连通性不再触碰 paramiko。"""
+    from core.remote_shell import RemoteShell
+
+    monkeypatch.setattr(transfer, "_shell", RemoteShell(connector))
+    return connector
 
 
 class TestVerifyChecksum:
     def test_matching_hash(self, monkeypatch):
-        client = _attach(TRANSFER, FakeClient(), monkeypatch)
-        client.exec_output = b"abc123  /models/a.bin\n"
+        connector = _attach_shell(TRANSFER, FakeConnector(output="abc123  /models/a.bin\n"), monkeypatch)
         assert TRANSFER.verify_remote_checksum("/models/a.bin", "ABC123", "sha256") is True
         # '/' 是 shlex 安全字符:不额外加引号
-        assert client.exec_cmd == "sha256sum /models/a.bin"
+        assert connector.commands == ["sha256sum /models/a.bin"]
 
     def test_mismatch(self, monkeypatch):
-        client = _attach(TRANSFER, FakeClient(), monkeypatch)
-        client.exec_output = b"deadbeef  /models/a.bin\n"
+        connector = _attach_shell(TRANSFER, FakeConnector(output="deadbeef  /models/a.bin\n"), monkeypatch)
         assert TRANSFER.verify_remote_checksum("/models/a.bin", "abc123", "sha256") is False
 
-    def test_unsupported_algorithm(self, monkeypatch):
-        _attach(TRANSFER, FakeClient(), monkeypatch)
+    def test_unsupported_algorithm_skips_exec(self, monkeypatch):
+        connector = _attach_shell(TRANSFER, FakeConnector(), monkeypatch)
         assert TRANSFER.verify_remote_checksum("/m", "x", "sha1") is False
+        assert connector.commands == [], "算法白名单外不得执行远程命令"
 
     def test_injection_paths_are_quoted(self, monkeypatch):
-        client = _attach(TRANSFER, FakeClient(), monkeypatch)
-        client.exec_output = b"abc123  /m\n"
+        connector = _attach_shell(TRANSFER, FakeConnector(output="abc123  /m\n"), monkeypatch)
         TRANSFER.verify_remote_checksum("/models/evil; rm -rf /", "abc123", "sha256")
-        assert client.exec_cmd == "sha256sum '/models/evil; rm -rf /'"
+        assert connector.commands == ["sha256sum '/models/evil; rm -rf /'"]
 
 
 class TestConnectivity:
     def test_success(self, monkeypatch):
-        client = _attach(TRANSFER, FakeClient(), monkeypatch)
+        _attach_shell(TRANSFER, FakeConnector(output="ok"), monkeypatch)
         ok, msg = TRANSFER.check_connectivity()
         assert ok is True
-        assert client.connected == 1
+        assert msg == "Connected successfully"
 
     def test_failure_reports_reason(self, monkeypatch):
-        client = _attach(TRANSFER, FakeClient(fail_connect=TimeoutError("timed out")), monkeypatch)
+        _attach_shell(TRANSFER, FakeConnector(error=TimeoutError("timed out")), monkeypatch)
         ok, msg = TRANSFER.check_connectivity()
         assert ok is False
         assert "timed out" in msg

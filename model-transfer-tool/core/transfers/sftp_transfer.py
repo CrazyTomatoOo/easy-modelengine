@@ -4,26 +4,18 @@
 RsyncTransfer 保留用于 SSH 密钥路径,密码路径走本适配器。
 """
 
-import shlex
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 from core.interfaces import TransferStrategy
-
-
-def _require_paramiko():
-    """懒加载 paramiko;缺失时抛出带安装指引的 RuntimeError。"""
-    try:
-        import paramiko
-    except ImportError as e:
-        raise RuntimeError(
-            "密码认证传输需要 paramiko,请安装: pip install paramiko"
-        ) from e
-    return paramiko
+from core.remote_shell import _require_paramiko, ParamikoConnector, RemoteShell
 
 
 class SftpTransfer(TransferStrategy):
-    """通过 paramiko SFTP 传输文件,支持密码与 SSH 密钥认证。"""
+    """通过 paramiko SFTP 传输文件,支持密码与 SSH 密钥认证。
+
+    校验/连通性委托 RemoteShell(Q1A);本类只管 SFTP 上传。
+    """
 
     def __init__(
         self,
@@ -38,6 +30,16 @@ class SftpTransfer(TransferStrategy):
         self.port = port
         self.password = password
         self.ssh_key = ssh_key
+        self._shell = RemoteShell(self._build_connector())
+
+    def _build_connector(self) -> ParamikoConnector:
+        return ParamikoConnector(
+            host=self.host,
+            username=self.username,
+            port=self.port,
+            password=self.password,
+            ssh_key=self.ssh_key,
+        )
 
     def _new_client(self, paramiko):
         """创建并配置 SSHClient(测试可注入实例工厂)。
@@ -92,29 +94,9 @@ class SftpTransfer(TransferStrategy):
     def verify_remote_checksum(
         self, remote_path: str, expected_hash: str, algorithm: str
     ) -> bool:
-        """在远程计算校验和并比对"""
-        if algorithm not in ("sha256", "md5"):
-            return False
-        try:
-            client = self._connect()
-            try:
-                cmd = "sha256sum" if algorithm == "sha256" else "md5sum"
-                _stdin, stdout, _stderr = client.exec_command(f"{cmd} {shlex.quote(remote_path)}")
-                output = stdout.read().decode(errors="replace").strip()
-            finally:
-                client.close()
-            parts = output.split()
-            return bool(parts) and parts[0].lower() == expected_hash.lower()
-        except RuntimeError:
-            raise  # paramiko 缺失指引必须到达调用方
-        except Exception:
-            return False
+        """在远程计算校验和并比对(委托 RemoteShell)"""
+        return self._shell.verify_checksum(remote_path, expected_hash, algorithm)
 
     def check_connectivity(self) -> Tuple[bool, str]:
         """尝试建立 SSH 连接;成功返回 (True, ...),失败返回原因。"""
-        try:
-            client = self._connect()
-            client.close()
-            return True, "Connected successfully"
-        except Exception as e:
-            return False, str(e)
+        return self._shell.check_connectivity()
