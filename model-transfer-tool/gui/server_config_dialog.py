@@ -16,7 +16,7 @@ from PyQt6.QtGui import QFont, QIcon
 
 from core.database import Database
 from core.server_profile import ServerProfile
-from utils.crypto import SecureStorage
+from utils.credentials import pack_credential, unpack_credential
 
 
 class ServerCard(QWidget):
@@ -380,9 +380,7 @@ class ServerConfigEditDialog(QDialog):
                 encrypted_auth = self.config.get('encrypted_auth', b'')
                 auth_salt = self.config.get('auth_salt', b'')
                 if encrypted_auth and auth_salt:
-                    nonce = encrypted_auth[:12]
-                    ciphertext = encrypted_auth[12:]
-                    ssh_key_path = SecureStorage.decrypt(ciphertext, nonce, auth_salt)
+                    ssh_key_path = unpack_credential(encrypted_auth, auth_salt)
                     self.ssh_key_input.setText(ssh_key_path)
             except Exception:
                 self.ssh_key_input.setText('')
@@ -446,9 +444,7 @@ class ServerConfigEditDialog(QDialog):
                 encrypted_auth = self.config.get('encrypted_auth')
                 auth_salt = self.config.get('auth_salt')
             else:
-                ciphertext, nonce, salt = SecureStorage.encrypt(password)
-                encrypted_auth = nonce + ciphertext
-                auth_salt = salt
+                encrypted_auth, auth_salt = pack_credential(password)
         else:
             auth_type = 'ssh_key'
             ssh_key_path = self.ssh_key_input.text().strip()
@@ -457,9 +453,7 @@ class ServerConfigEditDialog(QDialog):
                 encrypted_auth = self.config.get('encrypted_auth')
                 auth_salt = self.config.get('auth_salt')
             else:
-                ciphertext, nonce, salt = SecureStorage.encrypt(ssh_key_path)
-                encrypted_auth = nonce + ciphertext
-                auth_salt = salt
+                encrypted_auth, auth_salt = pack_credential(ssh_key_path)
         
         config_data = {
             'id': self.config.get('id'),

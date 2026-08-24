@@ -10,7 +10,7 @@ from typing import Optional
 from core.database import Database
 from core.interfaces import TransferStrategy
 from core.transfers.rsync_transfer import RsyncTransfer
-from utils.crypto import SecureStorage
+from utils.credentials import unpack_credential
 
 
 @dataclass(frozen=True)
@@ -40,11 +40,9 @@ class ServerProfile:
         )
 
     def _decrypt_secret(self) -> Optional[str]:
-        """解密加密凭据;失败返回 None。"""
+        """解密加密凭据(拆包协议在 utils/credentials 单一实现);失败返回 None。"""
         try:
-            nonce = self.encrypted_auth[: SecureStorage.NONCE_LENGTH]
-            ciphertext = self.encrypted_auth[SecureStorage.NONCE_LENGTH:]
-            return SecureStorage.decrypt(ciphertext, nonce, self.auth_salt)
+            return unpack_credential(self.encrypted_auth, self.auth_salt)
         except Exception:
             return None
 
