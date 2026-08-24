@@ -40,11 +40,20 @@ class ModelScopeDownloader(DownloadStrategy):
         self.cache_dir = cache_dir
         self.proxy = proxy
 
+    def _resolve_revision(self, revision: str) -> str:
+        """HF 源统一以 main 为默认分支;ModelScope 的默认分支是 master。
+
+        GUI 版本下拉默认 main(与 HF 语义一致),而 ModelScope 仓库没有 main
+        分支——get_model_files 对不存在分支静默返回空,会把仓库误报为空。
+        仅把字面 main 映射为 master;用户显式输入的其他分支原样传递,不存在
+        时仍如实报空。"""
+        return "master" if revision == "main" else revision
+
     def list_files(self, model_id: str, revision: str) -> list[FileInfo]:
         try:
             files = self.api.get_model_files(
                 model_id=model_id,
-                revision=revision,
+                revision=self._resolve_revision(revision),
                 recursive=True,
             )
         except Exception as e:
@@ -108,7 +117,7 @@ class ModelScopeDownloader(DownloadStrategy):
                     return model_file_download(
                         model_id=model_id,
                         file_path=file_info.path,
-                        revision=revision,
+                        revision=self._resolve_revision(revision),
                         cache_dir=cache_dir,
                         local_dir=str(temp_dir),
                     )

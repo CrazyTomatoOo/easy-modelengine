@@ -24,12 +24,17 @@ class Database:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._local = threading.local()
-    
+
     def _get_connection(self) -> sqlite3.Connection:
         """Get thread-local database connection."""
         if not hasattr(self._local, 'connection') or self._local.connection is None:
-            self._local.connection = sqlite3.connect(self.db_path)
+            self._local.connection = sqlite3.connect(self.db_path, timeout=30)
             self._local.connection.row_factory = sqlite3.Row
+            # WAL + busy_timeout:GUI 主线程与阶段线程池(下载/校验/传输)并发写同一
+            # 库文件;默认 journal 下短写互相撞文件锁,5s 默认超时会被写穿,抛
+            # database is locked。WAL 读不阻塞写,busy_timeout 让短写互等而非报错。
+            self._local.connection.execute("PRAGMA journal_mode=WAL")
+            self._local.connection.execute("PRAGMA busy_timeout=30000")
         return self._local.connection
     
     def close(self):

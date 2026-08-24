@@ -327,10 +327,57 @@ class TestAppSettings:
         
         assert value == "default_value"
     
-    def test_update_setting(self, temp_db):
-        """Should update existing setting."""
-        if Database is None:
-            pytest.skip("Database not implemented yet")
+        temp_db.set_setting("key1", "value1")
+        temp_db.set_setting("key1", "value2")
+        
+        value = temp_db.get_setting("key1")
+        
+        assert value == "value2"
+
+
+class TestConcurrentWrites:
+    def test_concurrent_writes_no_lock_error(self, temp_db):
+        """回归:下载完成瞬间 GUI 主线程与阶段线程池并发写库曾抛
+        sqlite3.OperationalError: database is locked(WAL + busy_timeout 前)。
+
+        模拟两个线程各自持 Database 写同一库文件:一个连写任务状态,
+        一个连加文件并回写状态——与下载收束时主线程落库、verify 线程
+        落库并发交错同构。
+        """
+        import threading
+
+        db_path = temp_db.db_path
+        task_id = temp_db.create_task(
+            task_type="download_only",
+            model_source="huggingface",
+            model_id="some/model",
+            local_cache_dir="/tmp/x",
+        )
+        errors = []
+        barrier = threading.Barrier(2)
+
+        def writer(db, prefix):
+            try:
+                barrier.wait()
+                for i in range(100):
+                    db.update_task_state(
+                        task_id, "verifying" if i % 2 else "downloading"
+                    )
+                    db.add_task_file(task_id, f"{prefix}-{i}", 100)
+            except Exception as e:  # noqa: BLE001
+                errors.append(repr(e))
+            finally:
+                db.close()
+
+        t1 = threading.Thread(target=writer, args=(Database(db_path), "a"))
+        t2 = threading.Thread(target=writer, args=(Database(db_path), "b"))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert errors == []
+        assert len(temp_db.get_task_files(task_id)) == 200
         
         temp_db.set_setting("key1", "value1")
         temp_db.set_setting("key1", "value2")
