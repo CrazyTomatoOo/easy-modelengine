@@ -8,9 +8,9 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
-    QFileDialog, QMessageBox
+    QFileDialog, QMessageBox, QApplication
 )
-from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor, QPalette
 from PyQt6.QtCore import Qt
 
 
@@ -76,6 +76,17 @@ class LogPanel(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "导出失败", f"保存日志时出错:\n{str(e)}")
 
+    def _level_color(self, level: str) -> str:
+        """日志级别取色——INFO 与未知级别用当前主题文字色,深浅模式自动适配。
+
+        固定色 #000000 在深色模式下黑字隐形;WARNING/ERROR 用高辨识警示色,
+        深浅背景均可读。"""
+        if level in ("WARNING", "ERROR"):
+            return self.LOG_COLORS[level]
+        if level == "DEBUG":
+            return self.LOG_COLORS[level]
+        return QApplication.palette().color(QPalette.ColorRole.WindowText).name()
+
     def append_log(self, message, level="INFO"):
         """追加日志
 
@@ -84,7 +95,7 @@ class LogPanel(QWidget):
             level: 日志级别 (DEBUG, INFO, WARNING, ERROR)
         """
         level = level.upper()
-        color = self.LOG_COLORS.get(level, "#000000")
+        color = self._level_color(level)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # 创建带颜色的文本格式

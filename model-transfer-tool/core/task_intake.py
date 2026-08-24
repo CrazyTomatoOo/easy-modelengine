@@ -97,6 +97,8 @@ def validate(
     else:
         if not draft.model_id:
             raise DraftValidationError("模型 ID 为空")
+        if task_type == TaskType.TRANSFER_ONLY:
+            raise DraftValidationError("「仅传输本地已有文件」只能使用本地模型来源")
         resolve_strategy(draft.source, strategies)
 
 
@@ -125,6 +127,11 @@ def build(
             )
             for f in files
         ]
+
+    if not task_files:
+        raise DraftValidationError(
+            f"{draft.model_id} 中没有可处理的文件(仓库为空或文件过滤过严)"
+        )
 
     return TaskConfig(
         task_type=task_type,

@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QPalette
 
 from core.database import Database
 from core.server_profile import ServerProfile
@@ -20,7 +22,7 @@ from utils.credentials import pack_credential, unpack_credential
 
 
 class ServerCard(QWidget):
-    """服务器卡片组件"""
+    """服务器卡片组件——可键盘操作(焦点 + Enter/Space 激活),非纯鼠标控件(原 mousePressEvent 等价 <div onClick>)。"""
     
     clicked = pyqtSignal(str)  # 发送服务器ID
     
@@ -28,6 +30,7 @@ class ServerCard(QWidget):
         super().__init__(parent)
         self.config = config
         self.server_id = str(config.get('id', ''))
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._setup_ui()
         self._apply_style()
     
@@ -83,30 +86,45 @@ class ServerCard(QWidget):
         self.user_label.setObjectName("card_user")
         self.user_label.setStyleSheet("color: #94A3B8; font-size: 12px;")
         layout.addWidget(self.user_label)
-    
+
     def _apply_style(self):
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #FFFFFF;
-                border: 2px solid #E2E8F0;
+        # 卡片用当前主题 palette 取色,深色模式下不再硬编码白底
+        pal = QApplication.palette()
+        base = pal.color(QPalette.ColorRole.Base).name()
+        border = pal.color(QPalette.ColorRole.Mid).name()
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {base};
+                border: 2px solid {border};
                 border-radius: 12px;
-            }
-            QWidget:hover {
+            }}
+            QWidget:hover {{
                 border-color: #6366F1;
-                background-color: #F8FAFF;
-            }
+            }}
+            QWidget:focus {{
+                border-color: #6366F1;
+            }}
         """)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(120)
-    
+
     def mousePressEvent(self, event):
-        self.clicked.emit(self.server_id)
-    
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.server_id)
+
+    def keyPressEvent(self, event):
+        """键盘替代:Tab 聚焦后 Enter/Space 激活卡片(等价 <button> 语义)。"""
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit(self.server_id)
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
     def set_selected(self, selected: bool):
         if selected:
             self.setStyleSheet("""
                 QWidget {
-                    background-color: #EEF2FF;
+                    background-color: transparent;
                     border: 2px solid #6366F1;
                     border-radius: 12px;
                 }
@@ -234,31 +252,23 @@ class ServerConfigEditDialog(QDialog):
         self.host_input.setPlaceholderText("例如: 192.168.1.100 或 example.com")
         basic_layout.addRow("主机地址 *", self.host_input)
         
-        # 端口和用户名并排
-        row_layout = QHBoxLayout()
-        
-        port_widget = QWidget()
-        port_layout = QFormLayout(port_widget)
-        port_layout.setContentsMargins(0, 0, 0, 0)
+                # 端口和用户名并排——同一 QGridLayout 内对齐(原双 QFormLayout 标签列/基线互不对齐)
+        port_user_grid = QGridLayout()
+        port_user_grid.setHorizontalSpacing(24)
+        port_user_grid.addWidget(QLabel("SSH端口"), 0, 0)
         self.port_input = QSpinBox()
         self.port_input.setRange(1, 65535)
         self.port_input.setValue(22)
-        self.port_input.setFixedWidth(100)
-        port_layout.addRow("SSH端口", self.port_input)
-        row_layout.addWidget(port_widget)
-        
-        row_layout.addSpacing(20)
-        
-        user_widget = QWidget()
-        user_layout = QFormLayout(user_widget)
-        user_layout.setContentsMargins(0, 0, 0, 0)
+        self.port_input.setFixedWidth(110)
+        port_user_grid.addWidget(
+            self.port_input, 1, 0, Qt.AlignmentFlag.AlignLeft
+        )
+        port_user_grid.addWidget(QLabel("用户名 *"), 0, 1)
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("登录用户名")
-        user_layout.addRow("用户名 *", self.username_input)
-        row_layout.addWidget(user_widget)
-        row_layout.addStretch()
-        
-        basic_layout.addRow(row_layout)
+        port_user_grid.addWidget(self.username_input, 1, 1)
+        port_user_grid.setColumnStretch(1, 1)
+        basic_layout.addRow(port_user_grid)
         layout.addWidget(basic_group)
         
         # 认证信息分组
@@ -311,8 +321,8 @@ class ServerConfigEditDialog(QDialog):
         self.ssh_key_input.setPlaceholderText("选择SSH私钥文件路径")
         ssh_key_layout.addWidget(self.ssh_key_input)
         
-        self.browse_btn = QPushButton("浏览...")
-        self.browse_btn.setFixedWidth(80)
+        self.browse_btn = QPushButton("浏览…")
+        self.browse_btn.setMinimumWidth(80)
         self.browse_btn.clicked.connect(self._browse_ssh_key)
         ssh_key_layout.addWidget(self.browse_btn)
         
@@ -474,20 +484,20 @@ class ServerConfigEditDialog(QDialog):
         return self._result_config or {}
 
 
-class ServerConfigDialog(QDialog):
-    """服务器配置管理主对话框 - 现代化卡片式布局"""
-    
+class ServerConfigPage(QWidget):
+    """服务器配置管理页——可内嵌(主窗口侧导航)也可弹窗(经 ServerConfigDialog 薄壳)。"""
+
     def __init__(self, parent=None, database: Database = None):
         super().__init__(parent)
         self.db = database
         self.configs = []
         self.selected_config_id = None
-        
-        self.setWindowTitle("服务器配置管理")
-        self.setMinimumSize(900, 600)
-        self.setModal(True)
-        
+
         self._setup_ui()
+        self._refresh_list()
+
+    def refresh(self) -> None:
+        """外部(如对话框关闭后)触发重载。"""
         self._refresh_list()
     
     def _setup_ui(self):
@@ -503,8 +513,8 @@ class ServerConfigDialog(QDialog):
         
         # ===== 左侧：服务器列表 =====
         left_panel = QWidget()
-        left_panel.setFixedWidth(380)
-        left_panel.setStyleSheet("background-color: #F8FAFC;")
+        left_panel.setMinimumWidth(300)  # 弹性宽度:不再固定 380,大屏可展开
+        left_panel.setStyleSheet("background-color: transparent;")
         left_layout = QVBoxLayout(left_panel)
         left_layout.setSpacing(16)
         left_layout.setContentsMargins(20, 20, 20, 20)
@@ -571,6 +581,13 @@ class ServerConfigDialog(QDialog):
         
         self.cards_scroll.setWidget(self.cards_container)
         left_layout.addWidget(self.cards_scroll)
+
+        # 搜索无匹配时的空结果提示
+        self.search_empty_label = QLabel("无匹配的服务器")
+        self.search_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.search_empty_label.setStyleSheet("color: {c}; padding: 24px;".format(c="#64748B"))
+        self.search_empty_label.hide()
+        left_layout.addWidget(self.search_empty_label)
         
         # 空状态（默认隐藏）
         self.empty_state = EmptyStateWidget()
@@ -578,7 +595,7 @@ class ServerConfigDialog(QDialog):
         self.empty_state.hide()
         left_layout.addWidget(self.empty_state)
         
-        main_layout.addWidget(left_panel)
+        main_layout.addWidget(left_panel, 2)
         
         # ===== 右侧：详情面板 =====
         right_panel = QWidget()
@@ -698,36 +715,13 @@ class ServerConfigDialog(QDialog):
         """)
         self.delete_btn.clicked.connect(self._on_delete)
         detail_btn_layout.addWidget(self.delete_btn)
-        
+
         self.detail_layout.addLayout(detail_btn_layout)
-        
+
         self.detail_stack.addWidget(self.detail_widget)
         right_layout.addWidget(self.detail_stack)
-        
-        # 底部关闭按钮
-        close_layout = QHBoxLayout()
-        close_layout.addStretch()
-        self.close_btn = QPushButton("关闭")
-        self.close_btn.setObjectName("secondary")
-        self.close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                border: 2px solid #E2E8F0;
-                color: #475569;
-                border-radius: 8px;
-                padding: 8px 24px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background-color: #F1F5F9;
-                border-color: #CBD5E1;
-            }
-        """)
-        self.close_btn.clicked.connect(self.accept)
-        close_layout.addWidget(self.close_btn)
-        right_layout.addLayout(close_layout)
-        
-        main_layout.addWidget(right_panel)
+
+        main_layout.addWidget(right_panel, 3)
         layout.addWidget(main_widget)
     
     def _refresh_list(self):
@@ -810,15 +804,16 @@ class ServerConfigDialog(QDialog):
         for config in self.configs:
             if str(config.get('id')) == config_id:
                 return config
-        return {}
-    
+                return {}
+
     def _on_search_changed(self, text: str):
         """搜索过滤"""
         self._apply_search_filter()
-    
+
     def _apply_search_filter(self):
-        """应用搜索过滤"""
+        """应用搜索过滤;无匹配时给空结果提示,不留空白滚动区。"""
         search_text = self.search_input.text().lower()
+        visible = 0
         
         for i in range(self.cards_layout.count()):
             item = self.cards_layout.itemAt(i)
@@ -834,6 +829,10 @@ class ServerConfigDialog(QDialog):
                 )
                 
                 card.setVisible(match)
+                if match:
+                    visible += 1
+
+        self.search_empty_label.setVisible(visible == 0 and len(self.configs) > 0)
     
     def _get_existing_names(self) -> list:
         return [config.get('name', '') for config in self.configs]
@@ -940,4 +939,26 @@ class ServerConfigDialog(QDialog):
                 "测试连接",
                 f"服务器 {profile.name}({profile.username}@{profile.host}:{profile.port})\n\n连接失败:\n{message}",
             )
+
+class ServerConfigDialog(QDialog):
+    """服务器配置管理对话框——页面薄壳:内嵌页 + 底部关闭按钮。"""
+
+    def __init__(self, parent=None, database: Database = None):
+        super().__init__(parent)
+        self.setWindowTitle("服务器配置管理")
+        self.setMinimumSize(900, 600)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.page = ServerConfigPage(self, database)
+        layout.addWidget(self.page)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(12, 0, 12, 10)
+        btn_layout.addStretch()
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
 

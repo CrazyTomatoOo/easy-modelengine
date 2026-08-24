@@ -3,24 +3,47 @@
 GUI 主窗口模块
 """
 
+import time
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QSplitter, QStatusBar,
-    QMessageBox, QPushButton, QDialog
+    QMainWindow, QWidget, QHBoxLayout, QStatusBar,
+    QMessageBox, QPushButton, QDialog, QListWidget, QListWidgetItem,
+    QStackedWidget,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QObject, QRunnable, pyqtSignal, QThreadPool, QSize
 from PyQt6.QtGui import QAction
 
 from core.database import Database
 from core.proxy_config import load as load_proxy
 from core.task_manager import TaskManager
 from core.task_intake import TaskDraft, build, create_strategies
+
+
+class TaskCreateWorker(QRunnable):
+    """后台构建任务配置:build 会联网 list_files,主线程执行会冻结 UI。"""
+
+    class _Signals(QObject):
+        created = pyqtSignal(object)  # TaskConfig
+        failed = pyqtSignal(str)
+
+    def __init__(self, draft: TaskDraft, strategies):
+        super().__init__()
+        self.draft = draft
+        self.strategies = strategies
+        self.signals = self._Signals()
+
+    def run(self):
+        try:
+            config = build(self.draft, strategies=self.strategies)
+            self.signals.created.emit(config)
+        except Exception as e:
+            self.signals.failed.emit(str(e))
 from gui.wizard_panel import WizardPanel
 from gui.task_panel import TaskPanel
 from gui.log_panel import LogPanel
 from gui.theme import ThemeManager
-from gui.server_config_dialog import ServerConfigDialog
+from gui.server_config_dialog import ServerConfigDialog, ServerConfigPage
 from gui.proxy_dialog import ProxyDialog
 from gui.task_details_dialog import TaskDetailsDialog
 from gui.state_labels import Presentation, TASK_STATE_PRESENTATION
@@ -33,7 +56,8 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.app = app
         self.setWindowTitle("模型下载与远程传输工具")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1024, 700)
+        self._progress_log_ts: dict = {}
         self._setup_backend()
         self._setup_ui()
         self._connect_signals()
@@ -44,30 +68,33 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
 
-        # 使用 QSplitter 创建三栏布局
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        # 左侧导航 + 右侧内容栈:模型下载/任务管理/服务器管理/日志信息分列,不再平铺
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # 左侧面板 - WizardPanel (500px)
+        self.nav_list = QListWidget()
+        self.nav_list.setObjectName("navList")
+        self.nav_list.setFixedWidth(180)
+        for label in ("📥 模型下载", "🗂️ 任务管理", "🖥️ 服务器管理", "📋 日志信息"):
+            item = QListWidgetItem(label)
+            item.setSizeHint(QSize(180, 44))
+            self.nav_list.addItem(item)
+
+        self.content_stack = QStackedWidget()
         self.wizard_panel = WizardPanel(database=self.db)
-        self.wizard_panel.setMinimumWidth(300)
-        splitter.addWidget(self.wizard_panel)
-
-        # 中间面板 - TaskPanel (300px)
         self.task_panel = TaskPanel()
-        self.task_panel.setMinimumWidth(200)
-        splitter.addWidget(self.task_panel)
-
-        # 右侧面板 - LogPanel (400px)
+        self.server_page = ServerConfigPage(database=self.db)
         self.log_panel = LogPanel()
-        self.log_panel.setMinimumWidth(200)
-        splitter.addWidget(self.log_panel)
+        for page in (self.wizard_panel, self.task_panel, self.server_page, self.log_panel):
+            self.content_stack.addWidget(page)
+        self.nav_list.currentRowChanged.connect(self.content_stack.setCurrentIndex)
+        # 连接后再设默认行,保证内容栈与高亮一致(默认进模型下载页)
+        self.nav_list.setCurrentRow(0)
+        self.content_stack.setCurrentIndex(0)
 
-        # 设置初始宽度
-        splitter.setSizes([500, 300, 400])
-
-        # 添加到布局
-        layout = QHBoxLayout(central)
-        layout.addWidget(splitter)
+        root.addWidget(self.nav_list)
+        root.addWidget(self.content_stack, 1)
 
         # 状态栏
         self.status_bar = QStatusBar()
@@ -175,9 +202,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         """连接信号槽"""
-        # 向导面板按钮
-        self.wizard_panel.prev_btn.clicked.connect(self.wizard_panel.go_prev)
-        self.wizard_panel.next_btn.clicked.connect(self.wizard_panel.go_next)
+        # 向导面板按钮(WizardPanel 内部已自连 prev/next;此间只连跨组件信号)
         self.log_panel.clear_btn.clicked.connect(self.log_panel.log_edit.clear)
 
         # TaskManager 信号到 GUI
@@ -196,6 +221,10 @@ class MainWindow(QMainWindow):
         self.task_panel.resume_task.connect(self._on_resume_task)
         self.task_panel.cancel_task.connect(self._on_cancel_task)
         self.task_panel.view_details.connect(self._on_view_details)
+        self.task_panel.retry_task.connect(self._on_retry_task)
+
+        # 向导 step4 控制按钮 → TaskManager(此前是死按钮,只写日志)
+        self.wizard_panel.task_control.connect(self._on_wizard_task_control)
 
     def _on_view_details(self, task_id: str):
         """打开任务详情对话框——文件级校验状态"""
@@ -209,47 +238,82 @@ class MainWindow(QMainWindow):
         self.log_panel.append_info(f"任务 {task_id[:8]}... 状态变更为: {pres.label}")
 
     def _on_task_progress(self, task_id: str, file_path: str, current: int, total: int):
-        """处理任务进度更新"""
-        if total > 0:
-            percent = int(current / total * 100)
-            message = f"任务 {task_id[:8]}... 文件 {file_path}: {percent}% ({current}/{total} bytes)"
-        else:
-            message = f"任务 {task_id[:8]}... 文件 {file_path}: {current} bytes"
-        self.log_panel.append_log(message, "INFO")
-
-        # 更新任务面板进度
+        """处理任务进度更新——进度条即时刷新,日志按文件每 5 秒节流(2GB 文件
+        每 chunk 一条会刷爆日志面板)。"""
         if total > 0:
             percent = int(current / total * 100)
             self.task_panel.update_task_progress(task_id, percent)
 
+        now = time.monotonic()
+        key = (task_id, file_path)
+        last = self._progress_log_ts.get(key, 0)
+        if now - last >= 5.0 and (total == 0 or current < total):
+            self._progress_log_ts[key] = now
+            if total > 0:
+                message = f"任务 {task_id[:8]}… 文件 {file_path}: {percent}% ({current}/{total} bytes)"
+            else:
+                message = f"任务 {task_id[:8]}… 文件 {file_path}: {current} bytes"
+            self.log_panel.append_log(message, "INFO")
+
     def _on_task_error(self, task_id: str, file_path: str, error: str):
-        """处理任务错误"""
-        message = f"任务 {task_id[:8]}... 文件 {file_path}: {error}"
+        """处理任务错误——错误消息带下一步指引,不只复述问题。"""
+        hint = ""
+        lowered = error.lower()
+        if any(k in lowered for k in ("connection", "timeout", "refused", "网络", "下载失败")):
+            hint = " 请检查网络/代理设置后重试。"
+        elif any(k in lowered for k in ("校验", "哈希", "sha256")):
+            hint = " 文件损坏已被删除,重新下载即可恢复。"
+        message = f"任务 {task_id[:8]}… 文件 {file_path}: {error}{hint}"
         self.log_panel.append_error(message)
         self.status_bar.showMessage(f"错误: {message}", 5000)
 
     def _on_task_warning(self, task_id: str, file_path: str, message: str):
         """处理任务警告"""
-        self.log_panel.append_warning(f"任务 {task_id[:8]}... {file_path}: {message}")
+        self.log_panel.append_warning(f"任务 {task_id[:8]}… {file_path}: {message}")
 
     def _on_task_completed(self, task_id: str):
-        """处理任务完成"""
-        message = f"任务 {task_id[:8]}... 已完成"
+        """处理任务完成——日志与状态栏反馈,不弹模态框打断连续多任务。"""
+        message = f"任务 {task_id[:8]}… 已完成"
         self.log_panel.append_success(message)
         self.status_bar.showMessage(message, 3000)
-        QMessageBox.information(self, "任务完成", f"任务 {task_id[:8]}... 已成功完成")
+
+    def _on_retry_task(self, task_id: str):
+        """重试失败/已取消任务(任务面板右键菜单)。"""
+        self.task_manager.retry_task(task_id)
+
+    def _on_wizard_task_control(self, action: str, task_id: str):
+        """向导 step4 控制按钮 → TaskManager(此前是死按钮)。"""
+        handler = {"pause": "pause", "resume": "resume", "cancel": "cancel", "retry": "retry"}.get(action)
+        if handler and task_id:
+            getattr(self.task_manager, f"{handler}_task")(task_id)
 
     def _on_task_created(self, draft: TaskDraft):
-        """处理向导创建的任务——单次调用 Task intake,失败不创建"""
-        try:
-            config = build(draft, strategies=create_strategies(load_proxy(self.db)))
-            task_id = self.task_manager.create_task(config)
-            self.task_panel.add_task(task_id, draft.model_id or "未知模型")
-            self.log_panel.append_success(f"任务已创建: {task_id[:8]}...")
+        """创建任务异步化:build 会联网 list_files,放后台避免 UI 冻结。"""
+        strategies = create_strategies(load_proxy(self.db))
+        worker = TaskCreateWorker(draft, strategies)
+        worker.signals.created.connect(self._on_task_config_ready)
+        worker.signals.failed.connect(self._on_task_create_failed)
+        self.log_panel.append_info("正在获取文件列表…")
+        QThreadPool.globalInstance().start(worker)
 
+    def _on_task_config_ready(self, config):
+        """文件列表就绪(主线程):建任务、入面板、登记向导当前任务。"""
+        try:
+            task_id = self.task_manager.create_task(config)
         except Exception as e:
-            self.log_panel.append_error(f"创建任务失败: {str(e)}")
-            QMessageBox.critical(self, "错误", f"创建任务失败: {str(e)}")
+            self._on_task_create_failed(str(e))
+            return
+        self.task_panel.add_task(task_id, config.model_id or "未知模型", task_type=config.task_type.value)
+        self.wizard_panel.set_current_task(task_id)
+        self.log_panel.append_success(f"任务已创建: {task_id[:8]}…")
+
+    def _on_task_create_failed(self, error: str):
+        """创建失败(主线程):如实报错并给下一步。"""
+        self.log_panel.append_error(f"创建任务失败: {error}")
+        QMessageBox.critical(
+            self, "错误",
+            f"创建任务失败:\n{error}\n请检查模型 ID、网络与代理设置后重试。",
+        )
 
     def _on_pause_task(self, task_id: str):
         """暂停任务"""
@@ -278,7 +342,17 @@ class MainWindow(QMainWindow):
         else:
             self.log_panel.append_info(message)
     def closeEvent(self, event):
-        """关闭事件处理"""
+        """关闭事件处理——有进行中的任务时先确认(退出会中断下载/传输)。"""
+        if self.task_panel.get_active_task_count() > 0:
+            reply = QMessageBox.question(
+                self, "确认退出",
+                "仍有进行中的任务,退出将中断它们。确认退出吗?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
         self.log_panel.append_info("应用即将关闭")
         self.db.close()
         event.accept()

@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QButtonGroup, QFileDialog, QMessageBox, QSplitter,
     QFrame, QScrollArea, QSizePolicy
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool, QRunnable
+from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool, QRunnable, QObject
 import shutil
 import os
 from pathlib import Path
@@ -22,23 +22,42 @@ from core.task_intake import TaskDraft, validate, DraftValidationError, resolve_
 
 
 class VersionFetchWorker(QRunnable):
-    """后台获取版本列表的 Worker"""
-    def __init__(self, panel, model_id, is_hf):
+    """后台获取版本列表的 Worker——经信号回 UI 线程,不直接碰界面。"""
+
+    class _Signals(QObject):
+        fetched = pyqtSignal(list, int)  # versions, file_count
+        failed = pyqtSignal(str)
+
+    def __init__(self, model_id: str, is_hf: bool):
         super().__init__()
-        self.panel = panel
         self.model_id = model_id
         self.is_hf = is_hf
+        self.signals = self._Signals()
 
     def run(self):
         try:
             source = "huggingface" if self.is_hf else "modelscope"
             downloader = resolve_strategy(source)
-
             files = downloader.list_files(self.model_id, "main")
-            versions = ["main", "master", "latest"]
-            self.panel._on_versions_fetched(versions, len(files))
+
+            # 真实分支/标签(HF 专用 API;其他源降级为主分支)
+            versions = ["main"]
+            if self.is_hf:
+                try:
+                    from huggingface_hub import HfApi
+
+                    refs = HfApi().list_repo_refs(self.model_id)
+                    versions = [b.name for b in refs.branches] + [t.name for t in refs.tags]
+                    if not versions:
+                        versions = ["main"]
+                    elif "main" not in versions:
+                        versions.insert(0, "main")
+                except Exception:
+                    pass  # refs 不可用(私有/限流)时以 main 兜底,文件列表已足够
+
+            self.signals.fetched.emit(versions, len(files))
         except Exception as e:
-            self.panel._on_versions_fetch_error(str(e))
+            self.signals.failed.emit(str(e))
 
 
 class WizardPanel(QWidget):
@@ -46,11 +65,13 @@ class WizardPanel(QWidget):
 
     task_created = pyqtSignal(object)  # TaskDraft
     log_signal = pyqtSignal(str, str)  # message, level
+    task_control = pyqtSignal(str, str)  # action(pause|resume|cancel|retry), task_id
 
     def __init__(self, parent=None, database=None):
         super().__init__(parent)
         self.db = database
         self.current_step = 0
+        self._current_task_id: str = None
         self._setup_ui()
         self._connect_signals()
         self._load_server_profiles()
@@ -137,16 +158,19 @@ class WizardPanel(QWidget):
         # 远程模型输入区域
         self.remote_model_widget = QWidget()
         remote_layout = QVBoxLayout(self.remote_model_widget)
-        remote_layout.setContentsMargins(0, 0, 0, 0)
+        remote_layout.setContentsMargins(0, 0, 12, 0)
 
         # 模型 ID
         model_layout = QFormLayout()
+        model_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)  # macOS 默认标签右对齐,统一钉死左对齐
         self.model_id_input = QLineEdit()
-        self.model_id_input.setPlaceholderText("例如: bert-base-chinese")
+        self.model_id_input.setPlaceholderText("bert-base-chinese")
+        self.model_id_input.setMinimumWidth(160)
         model_layout.addRow("模型 ID:", self.model_id_input)
         remote_layout.addLayout(model_layout)
 
-        # 版本选择 + 获取按钮（水平布局）
+        # 版本选择 + 获取按钮（水平布局）——并入 model_layout 同一 QFormLayout:
+        # 标签列与「模型 ID:」严格同列对齐(独立 HBox 会让标签起点错位 ~146px)
         version_row = QHBoxLayout()
         version_row.setSpacing(8)
 
@@ -155,16 +179,22 @@ class WizardPanel(QWidget):
         self.version_combo.setPlaceholderText("输入或选择版本")
         self.version_combo.addItems(["main", "master", "latest"])
         self.version_combo.setCurrentText("main")
-        version_row.addWidget(QLabel("版本/分支:"))
         version_row.addWidget(self.version_combo, stretch=1)
 
         self.fetch_version_btn = QPushButton("获取")
-        self.fetch_version_btn.setFixedWidth(70)
+        self.fetch_version_btn.setMinimumWidth(64)
         self.fetch_version_btn.setToolTip("获取远程仓库的版本/分支列表")
         self.fetch_version_btn.clicked.connect(self._fetch_versions)
         version_row.addWidget(self.fetch_version_btn)
 
-        remote_layout.addLayout(version_row)
+        model_layout.addRow("版本/分支:", version_row)
+
+        # 文件过滤(并入同一 form,三行标签严格同列)
+        self.filter_input = QLineEdit()
+        self.filter_input.setPlaceholderText("*.bin, *.safetensors")
+        self.filter_input.setMinimumWidth(160)
+        model_layout.addRow("文件过滤:", self.filter_input)
+
         layout.addWidget(self.remote_model_widget)
 
         # 本地模型输入区域（默认隐藏）
@@ -175,7 +205,7 @@ class WizardPanel(QWidget):
         self.local_path_input = QLineEdit()
         self.local_path_input.setPlaceholderText("选择本地模型目录")
         self.local_path_input.setReadOnly(True)
-        self.local_browse_btn = QPushButton("浏览...")
+        self.local_browse_btn = QPushButton("浏览…")
         self.local_browse_btn.clicked.connect(self._browse_local_model)
         local_model_layout.addWidget(QLabel("本地路径:"))
         local_model_layout.addWidget(self.local_path_input, stretch=1)
@@ -184,15 +214,12 @@ class WizardPanel(QWidget):
         self.local_model_widget.hide()
         layout.addWidget(self.local_model_widget)
 
-        # 文件过滤
-        filter_layout = QFormLayout()
-        self.filter_input = QLineEdit()
-        self.filter_input.setPlaceholderText("可选: 输入文件名模式过滤 (如 *.bin, *.safetensors)")
-        filter_layout.addRow("文件过滤:", self.filter_input)
-        layout.addLayout(filter_layout)
-
         layout.addStretch()
-        self.stack.addWidget(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(page)
+        self.stack.addWidget(scroll)
 
     def _setup_step2(self):
         """Step 2: 配置参数"""
@@ -244,7 +271,7 @@ class WizardPanel(QWidget):
         cache_layout.setContentsMargins(0, 0, 0, 0)
         self.cache_input = QLineEdit()
         self.cache_input.setPlaceholderText("本地缓存目录路径")
-        self.cache_btn = QPushButton("浏览...")
+        self.cache_btn = QPushButton("浏览…")
         cache_layout.addWidget(QLabel("本地缓存:"))
         cache_layout.addWidget(self.cache_input)
         cache_layout.addWidget(self.cache_btn)
@@ -258,16 +285,22 @@ class WizardPanel(QWidget):
         self.server_combo = QComboBox()
         self.server_combo.setEditable(True)
         self.server_combo.setPlaceholderText("选择已保存的服务器")
+        transfer_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         transfer_layout.addRow("目标服务器:", self.server_combo)
 
         self.target_dir_input = QLineEdit()
         self.target_dir_input.setPlaceholderText("目标服务器上的目录路径")
+        self.target_dir_input.setMinimumWidth(160)
         transfer_layout.addRow("目标目录:", self.target_dir_input)
 
         layout.addWidget(self.transfer_group)
 
         layout.addStretch()
-        self.stack.addWidget(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(page)
+        self.stack.addWidget(scroll)
 
     def _setup_step3(self):
         """Step 3: 确认信息"""
@@ -295,6 +328,7 @@ class WizardPanel(QWidget):
         self.summary_target = QLabel("-")
         self.summary_files = QLabel("-")
 
+        summary_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         summary_layout.addRow("模型来源:", self.summary_source)
         summary_layout.addRow("模型 ID:", self.summary_model)
         summary_layout.addRow("版本:", self.summary_version)
@@ -317,7 +351,11 @@ class WizardPanel(QWidget):
         layout.addWidget(files_group)
 
         layout.addStretch()
-        self.stack.addWidget(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(page)
+        self.stack.addWidget(scroll)
 
     def _setup_step4(self):
         """Step 4: 执行进度"""
@@ -383,7 +421,11 @@ class WizardPanel(QWidget):
         layout.addLayout(btn_layout)
 
         layout.addStretch()
-        self.stack.addWidget(page)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(page)
+        self.stack.addWidget(scroll)
 
     def _connect_signals(self):
         """连接信号"""
@@ -610,13 +652,15 @@ class WizardPanel(QWidget):
             return
 
         self.fetch_version_btn.setEnabled(False)
-        self.fetch_version_btn.setText("...")
+        self.fetch_version_btn.setText("…")
         self.version_combo.clear()
-        self.version_combo.setPlaceholderText("获取中...")
+        self.version_combo.setPlaceholderText("获取中…")
 
-        self.log_signal.emit(f"正在获取模型 {model_id} 的版本列表...", "INFO")
+        self.log_signal.emit(f"正在获取模型 {model_id} 的版本列表…", "INFO")
 
-        worker = VersionFetchWorker(self, model_id, self.hf_radio.isChecked())
+        worker = VersionFetchWorker(model_id, self.hf_radio.isChecked())
+        worker.signals.fetched.connect(self._on_versions_fetched)
+        worker.signals.failed.connect(self._on_versions_fetch_error)
         QThreadPool.globalInstance().start(worker)
 
     def _on_versions_fetched(self, versions, file_count):
@@ -629,13 +673,14 @@ class WizardPanel(QWidget):
         self.log_signal.emit(f"成功获取版本列表，找到 {file_count} 个文件", "SUCCESS")
 
     def _on_versions_fetch_error(self, error_msg):
-        """版本列表获取失败的回调（在主线程执行）"""
-        self.version_combo.clear()
-        self.version_combo.addItems(["main", "master", "latest"])
-        self.version_combo.setCurrentText("main")
+        """获取失败:如实报错,保留原有版本选择,不伪装成功。"""
         self.fetch_version_btn.setEnabled(True)
         self.fetch_version_btn.setText("获取")
         self.log_signal.emit(f"获取版本列表失败: {error_msg}", "ERROR")
+        QMessageBox.warning(
+            self, "获取失败",
+            f"无法获取版本列表:\n{error_msg}\n可手动输入版本/分支。",
+        )
 
     def _format_size(self, size_bytes):
         """格式化文件大小"""
@@ -648,32 +693,33 @@ class WizardPanel(QWidget):
         return f"{size_bytes:.1f} PB"
 
     def _check_storage_space(self):
-        """检查存储空间"""
+        """检查缓存目录可用空间——仅本地模式(files_tree 有真实清单)时评估。
+
+        远程任务未取文件清单,无法计算准确所需空间,虚报比不报更糟。
+        """
+        if self.files_tree.topLevelItemCount() == 0:
+            return
+
         cache_dir = self.cache_input.text().strip()
         if not cache_dir:
             cache_dir = str(Path.home() / ".cache" / "model-transfer")
 
         try:
-            import shutil
-            total, used, free = shutil.disk_usage(cache_dir)
+            _total, _used, free = shutil.disk_usage(cache_dir)
+            required = sum(
+                self._parse_size(self.files_tree.topLevelItem(i).text(1))
+                for i in range(self.files_tree.topLevelItemCount())
+            )
             free_gb = free / (1024**3)
+            required_gb = required / (1024**3)
 
-            # 计算所需空间（从文件列表）
-            required_gb = 0
-            for i in range(self.files_tree.topLevelItemCount()):
-                item = self.files_tree.topLevelItem(i)
-                size_str = item.text(1)
-                required_gb += self._parse_size(size_str)
-
-            required_gb = required_gb / (1024**3)
-
-            if free_gb < required_gb:
+            if required_gb > 0 and free_gb < required_gb:
                 self.log_signal.emit(
                     f"存储空间不足: 需要 {required_gb:.1f} GB, 可用 {free_gb:.1f} GB",
                     "WARNING"
                 )
-        except Exception:
-            pass
+        except OSError as e:
+            self.log_signal.emit(f"存储空间检查失败: {e}", "WARNING")
 
     def _parse_size(self, size_str):
         """解析大小字符串为字节数"""
@@ -732,31 +778,46 @@ class WizardPanel(QWidget):
             target_dir=self.target_dir_input.text() if task_id in [1, 2] else None,
         )
 
+    def set_current_task(self, task_id: str) -> None:
+        """记录向导当前操作的任务(由 MainWindow 在创建后注入)。"""
+        self._current_task_id = task_id
+        self.pause_btn.setEnabled(task_id is not None)
+        self.cancel_btn.setEnabled(task_id is not None)
+
     def _on_pause(self):
-        """暂停"""
-        self.pause_btn.setEnabled(False)
-        self.resume_btn.setEnabled(True)
-        self.log_signal.emit("任务已暂停", "INFO")
+        """暂停——提交 TaskManager 执行,按钮反馈避免重复点击。"""
+        if self._current_task_id:
+            self.task_control.emit("pause", self._current_task_id)
+            self.pause_btn.setEnabled(False)
+            self.resume_btn.setEnabled(True)
+        self.log_signal.emit("已请求暂停", "INFO")
 
     def _on_resume(self):
         """恢复"""
-        self.pause_btn.setEnabled(True)
-        self.resume_btn.setEnabled(False)
-        self.log_signal.emit("任务已恢复", "INFO")
+        if self._current_task_id:
+            self.task_control.emit("resume", self._current_task_id)
+            self.pause_btn.setEnabled(True)
+            self.resume_btn.setEnabled(False)
+        self.log_signal.emit("已请求恢复", "INFO")
 
     def _on_cancel(self):
-        """取消"""
+        """取消——破坏性操作,确认后提交 TaskManager(任务仍保留在面板)。"""
+        if not self._current_task_id:
+            return
         reply = QMessageBox.question(
-            self, "确认取消", "确定要取消当前任务吗？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            self, "确认取消", "确定要取消当前任务吗?已下载的部分会保留。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.log_signal.emit("任务已取消", "WARNING")
-            self.reset()
+            self.task_control.emit("cancel", self._current_task_id)
+            self.log_signal.emit("已请求取消", "WARNING")
 
     def _on_retry(self):
         """重试失败项"""
-        self.log_signal.emit("正在重试失败项...", "INFO")
+        if self._current_task_id:
+            self.task_control.emit("retry", self._current_task_id)
+        self.log_signal.emit("已请求重试", "INFO")
 
     def _on_export(self):
         """导出日志"""
@@ -785,9 +846,9 @@ class WizardPanel(QWidget):
                     QMessageBox.warning(self, "警告", "请输入模型ID")
                     return
 
-                version = self.version_combo.currentText()
-                if not version or version == "输入模型ID后自动获取...":
-                    QMessageBox.warning(self, "警告", "请选择或输入版本/分支")
+                version = self.version_combo.currentText().strip()
+                if not version:
+                    QMessageBox.warning(self, "警告", "请输入或选择版本/分支")
                     return
 
                 self.log_signal.emit(f"步骤1完成 - 模型: {model_id}, 版本: {version}", "INFO")

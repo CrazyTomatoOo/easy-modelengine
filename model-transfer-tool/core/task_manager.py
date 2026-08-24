@@ -27,7 +27,7 @@ class StageRunnable(QRunnable):
 
 class TaskManager(QObject):
     task_state_changed = pyqtSignal(str, str)
-    task_progress = pyqtSignal(str, str, int, int)
+    task_progress = pyqtSignal(str, str, 'qlonglong', 'qlonglong')
     task_error = pyqtSignal(str, str, str)
     task_warning = pyqtSignal(str, str, str)
     task_completed = pyqtSignal(str)
@@ -152,6 +152,7 @@ class TaskManager(QObject):
         worker = engine.get_worker(file_path)
         result = getattr(worker, "actual_hash", None)
         engine.finish(file_path, success, result=result)
+        self._persist_file_state(task_id, file_path, success, worker)
 
     def _on_stage_file_error(self, task_id: str, file_path: str, error: str):
         """各阶段共享的单文件错误处理"""
@@ -163,6 +164,37 @@ class TaskManager(QObject):
         worker = engine.get_worker(file_path)
         result = getattr(worker, "actual_hash", None)
         engine.finish(file_path, False, result=result)
+        self._persist_file_state(task_id, file_path, False, worker)
+
+    def _persist_file_state(self, task_id: str, file_path: str, success: bool, worker) -> None:
+        """单文件阶段结果落库——按 worker 类型区分阶段,不依赖 task.state 判定阶段。
+
+        下载/传输各自回写本阶段的 state/bytes/路径;校验阶段由 verify 的
+        on_result 回写(这里跳过 VerifyWorker)。坏文件记录 error_message。
+        """
+        if worker is None:
+            return
+        rows = self._db.get_task_files(task_id)
+        row = next((r for r in rows if r["file_path"] == file_path), None)
+        if row is None:
+            return
+        stage_state = StageState.COMPLETED.value if success else StageState.FAILED.value
+        local_path = str(getattr(worker, "local_path", "")) or None
+        if isinstance(worker, DownloadWorker):
+            self._db.update_file_state(
+                file_id=row["id"],
+                download_state=stage_state,
+                download_bytes=row["file_size"] if success else None,
+                local_path=local_path,
+                error_message=None if success else "下载失败",
+            )
+        elif isinstance(worker, TransferWorker):
+            self._db.update_file_state(
+                file_id=row["id"],
+                transfer_state=stage_state,
+                transfer_bytes=row["file_size"] if success else None,
+                error_message=None if success else "传输失败",
+            )
 
     def _on_stage_concluded(self, task_id: str, engine: StageEngine) -> None:
         """阶段收束:按当前状态路由下一阶段或终态(暂停/取消残留不推进)。"""
@@ -179,7 +211,7 @@ class TaskManager(QObject):
 
         task_type = TaskType(task.task_type)
         if task.state == TaskState.DOWNLOADING.value:
-            if task_type == TaskType.FULL_PIPELINE:
+            if task_type in (TaskType.FULL_PIPELINE, TaskType.DOWNLOAD_ONLY):
                 self._start_verify_stage(task_id)
             else:
                 self._complete_task(task_id)
@@ -221,6 +253,12 @@ class TaskManager(QObject):
             if (target.exists() and not tmp.exists()
                     and target.stat().st_size == file_dict["file_size"]):
                 engine.mark_done(file_dict["file_path"])
+                self._db.update_file_state(
+                    file_id=file_dict["id"],
+                    download_state=StageState.COMPLETED.value,
+                    download_bytes=file_dict["file_size"],
+                    local_path=str(target),
+                )
             else:
                 pending.append(file_dict)
 
@@ -374,6 +412,22 @@ class TaskManager(QObject):
             self._try_schedule_next()
         else:
             self.task_warning.emit(task_id, "lifecycle", "任务已完成或已结束,无法取消")
+
+    def retry_task(self, task_id: str) -> None:
+        """重试失败/已取消任务:重置为 PENDING 重新入队。
+
+        已完成且大小一致的文件由下载阶段按大小跳过,断点续传免费获得;
+        校验/传输阶段按任务类型重新跑。终端状态外不可重试。"""
+        task = self._db.get_task(task_id)
+        if task is None:
+            return
+        if task.state not in (TaskState.FAILED.value, TaskState.CANCELLED.value):
+            self.task_warning.emit(task_id, "lifecycle", "只有失败或已取消的任务可以重试")
+            return
+        self._db.update_task_state(task_id, TaskState.PENDING.value)
+        self.task_state_changed.emit(task_id, TaskState.PENDING.value)
+        self._task_queue.append(task_id)
+        self._try_schedule_next()
 
     def _set_paused(self, task_id: str, paused_state: TaskState) -> None:
         self._db.update_task_state(task_id, paused_state.value)

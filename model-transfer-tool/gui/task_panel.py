@@ -5,7 +5,8 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QPushButton,
-    QProgressBar, QLabel, QListWidgetItem, QMenu, QMessageBox,
+    QProgressBar, QLabel, QListWidgetItem, QMenu, QMessageBox, QSizePolicy,
+    QStackedWidget,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QAction
@@ -14,12 +15,20 @@ from gui.state_labels import TASK_STATE_PRESENTATION, Presentation
 
 
 class TaskItemWidget(QWidget):
-    """自定义任务项控件，显示任务信息和进度条"""
+    """自定义任务项控件,显示任务信息、类型徽标与进度条"""
 
-    def __init__(self, task_id, model_name, parent=None):
+    # 任务类型徽标:文字与底色(与 state_labels 调性一致)
+    BADGE_STYLE = {
+        "download_only": ("下载", "#2563EB"),
+        "transfer_only": ("上传", "#EA580C"),
+        "full_pipeline": ("下载+上传", "#6D28D9"),
+    }
+
+    def __init__(self, task_id, model_name, task_type="download_only", parent=None):
         super().__init__(parent)
         self.task_id = task_id
         self.model_name = model_name
+        self.task_type = task_type
         self._status_key = "pending"
         self._progress = 0
         self._setup_ui()
@@ -33,13 +42,27 @@ class TaskItemWidget(QWidget):
         info_layout = QVBoxLayout()
         info_layout.setSpacing(2)
 
+        id_row = QHBoxLayout()
+        id_row.setSpacing(6)
         self.id_label = QLabel(f"<b>{self.task_id[:8]}</b>")
         self.id_label.setStyleSheet("font-size: 11px;")
-        info_layout.addWidget(self.id_label)
+        id_row.addWidget(self.id_label)
+
+        badge_text, badge_color = self.BADGE_STYLE.get(
+            self.task_type, ("下载", "#2563EB"))
+        self.type_badge = QLabel(badge_text)
+        self.type_badge.setStyleSheet(
+            f"background-color: {badge_color}; color: white; "
+            "border-radius: 8px; padding: 1px 8px; font-size: 10px;"
+        )
+        id_row.addWidget(self.type_badge)
+        id_row.addStretch()
+        info_layout.addLayout(id_row)
 
         self.model_label = QLabel(self.model_name)
         self.model_label.setStyleSheet("font-size: 12px;")
         self.model_label.setWordWrap(True)
+        self.model_label.setToolTip(self.model_name)
         info_layout.addWidget(self.model_label)
 
         self.status_label = QLabel(f"状态: {self._status_key}")
@@ -87,8 +110,10 @@ class TaskPanel(QWidget):
         super().__init__(parent)
         self._tasks = {}
         self._filter = "全部"
+        self._type_filter = "全部类型"
         self._setup_ui()
         self._connect_signals()
+        self._update_empty_state()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -115,17 +140,49 @@ class TaskPanel(QWidget):
         for btn in self.filter_buttons.values():
             btn.setCheckable(True)
             btn.setAutoExclusive(True)
+            # 紧凑 padding + 均分宽度:全局按钮样式(10px 20px)会把四个筛选按钮文字挤出面板
+            btn.setStyleSheet("QPushButton { padding: 6px 8px; min-height: 28px; }")
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             filter_layout.addWidget(btn)
 
         self.filter_all_btn.setChecked(True)
         filter_layout.addStretch()
         layout.addLayout(filter_layout)
 
-        # 任务列表
+        # 类型筛选行:按任务类型(下载/上传)过滤
+        type_layout = QHBoxLayout()
+        type_layout.setSpacing(8)
+        type_layout.setContentsMargins(0, 0, 0, 0)
+        self.type_all_btn = QPushButton("全部类型")
+        self.type_download_btn = QPushButton("下载")
+        self.type_transfer_btn = QPushButton("上传")
+
+        self.type_buttons = {
+            "全部类型": self.type_all_btn,
+            "下载": self.type_download_btn,
+            "上传": self.type_transfer_btn,
+        }
+        for btn in self.type_buttons.values():
+            btn.setCheckable(True)
+            btn.setAutoExclusive(True)
+            btn.setStyleSheet("QPushButton { padding: 4px 10px; min-height: 24px; }")
+            type_layout.addWidget(btn)
+        self.type_all_btn.setChecked(True)
+        type_layout.addStretch()
+        layout.addLayout(type_layout)
+
+        # 任务列表 + 空态(无任务时给指引,不留白板)
+        self.list_stack = QStackedWidget()
         self.task_list = QListWidget()
         self.task_list.setSpacing(5)
         self.task_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        layout.addWidget(self.task_list)
+        self.list_stack.addWidget(self.task_list)
+
+        self.empty_label = QLabel("暂无任务\n从左侧「模型下载」创建第一个任务")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setStyleSheet("color: #64748B; font-size: 13px;")
+        self.list_stack.addWidget(self.empty_label)
+        layout.addWidget(self.list_stack)
 
         # 按钮区域
         btn_layout = QHBoxLayout()
@@ -145,13 +202,31 @@ class TaskPanel(QWidget):
         self.filter_completed_btn.clicked.connect(lambda: self._set_filter("已完成"))
         self.filter_failed_btn.clicked.connect(lambda: self._set_filter("失败"))
 
+        self.type_all_btn.clicked.connect(lambda: self._set_type_filter("全部类型"))
+        self.type_download_btn.clicked.connect(lambda: self._set_type_filter("下载"))
+        self.type_transfer_btn.clicked.connect(lambda: self._set_type_filter("上传"))
+
         self.pause_all_btn.clicked.connect(self._pause_all)
         self.cancel_all_btn.clicked.connect(self._cancel_all)
 
     def _set_filter(self, filter_type):
-        """设置过滤器"""
+        """设置状态过滤器"""
         self._filter = filter_type
         self._refresh_list()
+
+    def _set_type_filter(self, filter_type):
+        """设置类型过滤器(下载/上传)——徽标维度的筛选,状态筛选之上叠加。"""
+        self._type_filter = filter_type
+        self._refresh_list()
+
+    def _type_matches(self, task_type: str) -> bool:
+        if self._type_filter == "全部类型":
+            return True
+        if self._type_filter == "下载":
+            return task_type in ("download_only", "full_pipeline")
+        if self._type_filter == "上传":
+            return task_type in ("transfer_only", "full_pipeline")
+        return True
 
     def _get_status_category(self, status_key):
         """获取状态分类(查呈现注册表,key 驱动)"""
@@ -172,10 +247,24 @@ class TaskPanel(QWidget):
             status_key = self._tasks[task_id].get("status", "pending")
             category = self._get_status_category(status_key)
 
-            if self._filter == "全部" or category == self._filter:
-                item.setHidden(False)
-            else:
-                item.setHidden(True)
+            task_type = self._tasks[task_id].get("task_type", "download_only")
+            status_ok = self._filter == "全部" or category == self._filter
+            type_ok = self._type_matches(task_type)
+            item.setHidden(not (status_ok and type_ok))
+
+        self._update_empty_state()
+
+    def _update_empty_state(self):
+        """无可见任务时显示空态指引(任务可存在但被过滤器隐藏)。"""
+        visible = sum(
+            1 for i in range(self.task_list.count())
+            if not self.task_list.item(i).isHidden()
+        )
+        if visible == 0:
+            self.empty_label.setText("暂无任务" if not self._tasks else "当前筛选下无任务")
+            self.list_stack.setCurrentIndex(1)
+        else:
+            self.list_stack.setCurrentIndex(0)
 
     def _show_context_menu(self, position):
         """显示右键菜单"""
@@ -202,10 +291,10 @@ class TaskPanel(QWidget):
             resume_action.triggered.connect(lambda: self.resume_task.emit(task_id))
             menu.addAction(resume_action)
 
-        # 取消
+        # 取消(破坏性操作,需确认)
         if status_key not in ("completed", "cancelled"):
             cancel_action = QAction("取消", self)
-            cancel_action.triggered.connect(lambda: self.cancel_task.emit(task_id))
+            cancel_action.triggered.connect(lambda: self._confirm_cancel(task_id))
             menu.addAction(cancel_action)
 
         menu.addSeparator()
@@ -223,12 +312,23 @@ class TaskPanel(QWidget):
 
         menu.exec(self.task_list.mapToGlobal(position))
 
-    def add_task(self, task_id, model_name):
-        """添加任务"""
+    def _confirm_cancel(self, task_id: str) -> None:
+        """取消属破坏性操作(丢弃未完成部分),必须确认——与「取消全部」一致。"""
+        reply = QMessageBox.question(
+            self, "确认取消", "确定要取消该任务吗?已下载的部分会保留。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.cancel_task.emit(task_id)
+
+    def add_task(self, task_id, model_name, task_type="download_only"):
+        """添加任务——task_type 为 TaskType.value,驱动类型徽标与筛选。"""
         self._tasks[task_id] = {
             "model_name": model_name,
             "status": "pending",
             "progress": 0,
+            "task_type": task_type,
         }
 
         # 创建自定义任务项
@@ -236,7 +336,7 @@ class TaskPanel(QWidget):
         item.setSizeHint(QSize(0, 80))
         item.setData(Qt.ItemDataRole.UserRole, task_id)
 
-        widget = TaskItemWidget(task_id, model_name)
+        widget = TaskItemWidget(task_id, model_name, task_type=task_type)
         self.task_list.addItem(item)
         self.task_list.setItemWidget(item, widget)
 
@@ -286,6 +386,7 @@ class TaskPanel(QWidget):
                 break
 
         del self._tasks[task_id]
+        self._update_empty_state()
 
     def _pause_all(self):
         """暂停所有可暂停的任务"""

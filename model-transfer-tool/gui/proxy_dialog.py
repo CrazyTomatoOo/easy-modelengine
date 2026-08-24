@@ -50,6 +50,7 @@ class ProxyDialog(QDialog):
         proxy_group = QGroupBox("代理服务器")
         proxy_layout = QFormLayout(proxy_group)
         proxy_layout.setSpacing(12)
+        proxy_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         proxy_layout.setContentsMargins(16, 20, 16, 16)
 
         # 启用代理复选框
@@ -134,30 +135,48 @@ class ProxyDialog(QDialog):
             QMessageBox.critical(self, "保存失败", f"保存设置时出错: {str(e)}")
 
     def _test_proxy(self):
-        """测试代理连接"""
+        """测试代理连通性——经代理请求 huggingface.co,如实报告成功/失败。"""
         if not self.enable_checkbox.isChecked():
             QMessageBox.information(self, "提示", "请先启用代理")
             return
 
         http_proxy = self.http_input.text().strip()
         https_proxy = self.https_input.text().strip()
-
         if not http_proxy and not https_proxy:
             QMessageBox.information(self, "提示", "请先填写代理地址")
             return
 
-        # TODO: 实现实际的代理测试逻辑
-        info = []
-        if http_proxy:
-            info.append(f"HTTP 代理: {http_proxy}")
-        if https_proxy:
-            info.append(f"HTTPS 代理: {https_proxy}")
+        self.test_btn.setEnabled(False)
+        self.test_btn.setText("测试中…")
+        info = [f"HTTP 代理: {http_proxy or '未设置'}", f"HTTPS 代理: {https_proxy or '未设置'}"]
 
-        QMessageBox.information(
-            self,
-            "代理测试",
-            "代理测试功能即将上线\n\n当前配置:\n" + "\n".join(info)
-        )
+        try:
+            import requests
+
+            proxies = {"http": http_proxy, "https": http_proxy or https_proxy}
+            resp = requests.get(
+                "https://huggingface.co",
+                proxies=proxies,
+                timeout=10,
+            )
+            if resp.status_code < 500:
+                QMessageBox.information(
+                    self, "代理测试",
+                    "连接成功\n\n" + "\n".join(info) + f"\n状态码: {resp.status_code}",
+                )
+            else:
+                QMessageBox.warning(
+                    self, "代理测试失败",
+                    "代理可达但目标返回异常状态\n\n" + "\n".join(info) + f"\n状态码: {resp.status_code}",
+                )
+        except Exception as e:
+            QMessageBox.warning(
+                self, "代理测试失败",
+                f"经代理连接 huggingface.co 失败:\n{e}\n\n请检查代理地址、端口与认证信息。",
+            )
+        finally:
+            self.test_btn.setEnabled(True)
+            self.test_btn.setText("测试代理连接")
 
     def get_proxy_settings(self) -> dict:
         """获取当前代理设置"""

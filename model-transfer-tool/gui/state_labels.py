@@ -21,22 +21,22 @@ class Presentation:
 
 
 TASK_STATE_PRESENTATION: dict[str, Presentation] = {
-    TaskState.PENDING.value: Presentation("等待中", "#666666", "进行中"),
-    TaskState.DOWNLOADING.value: Presentation("下载中", "#0066cc", "进行中"),
-    TaskState.PAUSED_DOWNLOAD.value: Presentation("已暂停", "#ff9900", "进行中"),
-    TaskState.VERIFYING.value: Presentation("校验中", "#0066cc", "进行中"),
-    TaskState.TRANSFERRING.value: Presentation("传输中", "#0066cc", "进行中"),
-    TaskState.PAUSED_TRANSFER.value: Presentation("已暂停", "#ff9900", "进行中"),
-    TaskState.COMPLETED.value: Presentation("已完成", "#009900", "已完成"),
-    TaskState.FAILED.value: Presentation("失败", "#cc0000", "失败"),
-    TaskState.CANCELLED.value: Presentation("已取消", "#999999", "失败"),
+    TaskState.PENDING.value: Presentation("等待中", "#6B7280", "进行中"),
+    TaskState.DOWNLOADING.value: Presentation("下载中", "#2563EB", "进行中"),
+    TaskState.PAUSED_DOWNLOAD.value: Presentation("已暂停", "#B45309", "进行中"),
+    TaskState.VERIFYING.value: Presentation("校验中", "#2563EB", "进行中"),
+    TaskState.TRANSFERRING.value: Presentation("传输中", "#2563EB", "进行中"),
+    TaskState.PAUSED_TRANSFER.value: Presentation("已暂停", "#B45309", "进行中"),
+    TaskState.COMPLETED.value: Presentation("已完成", "#16A34A", "已完成"),
+    TaskState.FAILED.value: Presentation("失败", "#DC2626", "失败"),
+    TaskState.CANCELLED.value: Presentation("已取消", "#6B7280", "失败"),
 }
 
 STAGE_STATE_PRESENTATION: dict[str, Presentation] = {
-    "pending": Presentation("待校验", "#666666"),
-    StageState.NOT_STARTED.value: Presentation("未开始", "#666666"),
-    StageState.IN_PROGRESS.value: Presentation("校验中", "#0066cc"),
-    StageState.COMPLETED.value: Presentation("通过", "#009900"),
-    StageState.FAILED.value: Presentation("失败", "#cc0000"),
-    StageState.SKIPPED.value: Presentation("未校验", "#b58900"),
+    "pending": Presentation("待校验", "#6B7280"),
+    StageState.NOT_STARTED.value: Presentation("未开始", "#6B7280"),
+    StageState.IN_PROGRESS.value: Presentation("校验中", "#2563EB"),
+    StageState.COMPLETED.value: Presentation("通过", "#16A34A"),
+    StageState.FAILED.value: Presentation("失败", "#DC2626"),
+    StageState.SKIPPED.value: Presentation("未校验", "#B45309"),
 }

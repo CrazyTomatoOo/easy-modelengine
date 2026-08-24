@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import requests
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, hf_hub_url
 from huggingface_hub.utils import RepositoryNotFoundError
 
 from core.interfaces import DownloadStrategy, FileInfo
@@ -29,14 +29,14 @@ class HuggingFaceDownloader(DownloadStrategy):
         except RepositoryNotFoundError:
             raise ValueError(f"Repository not found: {model_id}")
 
+        infos = self.api.get_paths_info(
+            repo_id=model_id, paths=files, revision=revision, expand=True
+        )
         file_infos = []
-        for file_path in files:
-            file_info = self.api.file_metadata(
-                repo_id=model_id, filename=file_path, revision=revision
-            )
-            size = getattr(file_info, "size", 0)
-            lfs_sha256 = getattr(getattr(file_info, "lfs", None), "sha256", None)
-            file_infos.append(FileInfo(path=file_path, size=size, expected_hash=lfs_sha256))
+        for info in infos:
+            size = getattr(info, "size", 0) or 0
+            lfs_sha256 = getattr(getattr(info, "lfs", None), "sha256", None)
+            file_infos.append(FileInfo(path=info.path, size=size, expected_hash=lfs_sha256))
 
         return file_infos
 
@@ -58,7 +58,7 @@ class HuggingFaceDownloader(DownloadStrategy):
             resume_byte_pos = tmp_path.stat().st_size
             headers["Range"] = f"bytes={resume_byte_pos}-"
 
-        url = self.api.hf_hub_url(repo_id=model_id, filename=file_info.path, revision=revision)
+        url = hf_hub_url(repo_id=model_id, filename=file_info.path, revision=revision)
 
         try:
             with self.session.get(url, headers=headers, stream=True, timeout=30) as response:

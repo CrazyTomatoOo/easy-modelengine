@@ -2,6 +2,7 @@
 
 import tempfile
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from core.database import Database
 from core.task_config import TaskConfig, TaskType, TaskFile
 from core.task_manager import TaskManager
 from core.interfaces import FileInfo
+from core.workers import DownloadWorker
 
 
 @pytest.fixture
@@ -223,18 +225,30 @@ class TestVerifyIntegrity:
         assert row["actual_hash"] == digest
         assert manager._db.get_task(task_id).state == "completed"
 
-    def test_verify_mismatch_deletes_corrupt_file(self, manager, tmp_path):
+    def test_download_only_now_verifies(self, manager, tmp_path):
+        """DOWNLOAD_ONLY 下载后也进校验:坏哈希 → FAILED(旧行为直接完成)。
+
+        下载成功后的 FAILED 只能来自校验阶段;损坏文件被校验删除。
+        """
         cache = tmp_path / "cache"
         cache.mkdir()
-        bad = cache / "a.bin"
-        bad.write_bytes(b"corrupted")
 
-        task_id = manager.create_task(self._hashed_config(cache))
-        manager._execute_verify_stage(task_id)
+        manager._create_downloader = lambda source: manager._succeeding
+        task_id = manager.create_task(_config(
+            task_type=TaskType.DOWNLOAD_ONLY,
+            files=[TaskFile(
+                file_path="a.bin",
+                file_size=2,
+                expected_hash="x" * 64,
+                hash_algorithm="sha256",
+            )],
+            cache=cache,
+        ))
+        manager._execute_download_stage(task_id)
         _settle(manager)
 
         assert manager._db.get_task(task_id).state == "failed"
-        assert not bad.exists(), "损坏文件必须被删除,防止恢复按大小跳过"
+        assert not (cache / "a.bin").exists(), "损坏文件必须被校验阶段删除"
 
     def test_unverifiable_marked_skipped(self, manager, tmp_path):
         cache = tmp_path / "cache"
@@ -249,14 +263,81 @@ class TestVerifyIntegrity:
         assert row["verify_state"] == "skipped"
         assert manager._db.get_task(task_id).state == "completed"
 
-    def test_download_only_now_verifies(self, manager, tmp_path):
-        """DOWNLOAD_ONLY 下载后也进校验:坏哈希 → FAILED(旧行为直接完成)。"""
+    def test_resume_skip_persists_download_state(self, manager, tmp_path):
+        """恢复续传:大小一致的既有文件被预跳过,download_state/local_path 仍须落库。"""
         cache = tmp_path / "cache"
         cache.mkdir()
-        (cache / "a.bin").write_bytes(b"bad")
+        (cache / "a.bin").write_bytes(b"good-data")
 
-        task_id = manager.create_task(self._hashed_config(cache))
+        task_id = manager.create_task(_config(
+            task_type=TaskType.DOWNLOAD_ONLY,
+            files=[TaskFile(file_path="a.bin", file_size=9)],
+            cache=cache,
+        ))
         manager._execute_download_stage(task_id)
         _settle(manager)
 
+        row = manager._db.get_task_files(task_id)[0]
+        assert row["download_state"] == "completed"
+        assert str(row["local_path"]).endswith("a.bin")
+
+
+class TestLargeFileProgress:
+    """进度信号必须承载 >2^31 的字节数(32 位 int 溢出会让大模型进度为负)。"""
+
+    def test_progress_survives_int32_range(self, manager):
+        seen = []
+
+        class _BigDownloader:
+            def download_file(self, model_id, revision, file_info, local_path, progress_callback=None):
+                progress_callback(2_311_145_830, 2_311_145_830)
+                return True
+
+        worker = DownloadWorker(
+            task_id="t",
+            file_info=FileInfo(path="big.bin", size=2_311_145_830),
+            downloader=_BigDownloader(),
+            model_id="m",
+            revision="r",
+            local_path="/tmp/big.bin",
+        )
+        worker.signals.progress.connect(lambda *args: seen.append(args))
+
+        thread = threading.Thread(target=worker.run)
+        thread.start()
+        worker.done_event.wait(5)
+        thread.join()
+        for _ in range(10):
+            QCoreApplication.processEvents()
+
+class TestRetryTask:
+    """retry_task:失败/已取消任务重置为 PENDING 重新入队,其余状态拒绝。"""
+
+    def test_failed_task_requeues_as_pending(self, manager, tmp_path):
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        task_id = manager.create_task(_config(task_type=TaskType.DOWNLOAD_ONLY, cache=cache))
+        manager._execute_download_stage(task_id)
+        _settle(manager)
         assert manager._db.get_task(task_id).state == "failed"
+
+        manager.retry_task(task_id)
+
+        task = manager._db.get_task(task_id)
+        assert task.state == "pending"
+        # 入队后会被立即调度(挪进 active);断言恰好一份,防止重复入队双跑
+        in_queue = task_id in manager._task_queue
+        in_active = task_id in manager._active_tasks
+        assert (in_queue or in_active) and not (in_queue and in_active), "任务必须恰好调度一次"
+
+    def test_valid_state_rejects_retry(self, manager):
+        task_id = manager.create_task(_config(task_type=TaskType.DOWNLOAD_ONLY))
+        assert manager._db.get_task(task_id).state == "pending"
+
+        manager.retry_task(task_id)
+
+        assert manager._db.get_task(task_id).state == "pending"
+        in_queue = task_id in manager._task_queue
+        in_active = task_id in manager._active_tasks
+        assert (in_queue or in_active) and not (in_queue and in_active), "非终态任务不应被重复调度"

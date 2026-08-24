@@ -48,15 +48,24 @@ class TaskDetailsDialog(QDialog):
         for row, f in enumerate(files):
             pres = STAGE_STATE_PRESENTATION.get(f.get("verify_state"))
             table.setItem(row, 0, QTableWidgetItem(f["file_path"]))
-            table.setItem(row, 1, QTableWidgetItem(str(f.get("file_size", ""))))
+            size = f.get("file_size") or 0
+            table.setItem(row, 1, QTableWidgetItem(f"{size:,}" if size else "—"))
             state_item = QTableWidgetItem(
                 pres.label if pres else (f.get("verify_state") or "—")
             )
             if pres:
                 state_item.setForeground(QColor(pres.color))
             table.setItem(row, 2, state_item)
-            table.setItem(row, 3, QTableWidgetItem(f.get("expected_hash") or "—"))
-            table.setItem(row, 4, QTableWidgetItem(f.get("actual_hash") or "—"))
+
+            # 64 位哈希列省略显示 + tooltip 看全文(ResizeToContents 下长文本会把列撑爆)
+            expected = f.get("expected_hash") or ""
+            actual = f.get("actual_hash") or ""
+            exp_item = QTableWidgetItem((expected[:16] + "…") if expected else "—")
+            exp_item.setToolTip(expected)
+            table.setItem(row, 3, exp_item)
+            act_item = QTableWidgetItem((actual[:16] + "…") if actual else "—")
+            act_item.setToolTip(actual)
+            table.setItem(row, 4, act_item)
 
         layout.addWidget(table)
 

@@ -71,9 +71,9 @@ class ThemeManager:
             color: white;
             border: none;
             border-radius: 8px;
-            padding: 10px 20px;
+            padding: 6px 12px;
             font-weight: 600;
-            min-height: 36px;
+            min-height: 32px;
         }}
         
         QPushButton:hover {{
@@ -83,6 +83,10 @@ class ThemeManager:
         QPushButton:pressed {{
             background-color: {c['primary']};
             padding: 11px 19px 9px 21px;
+        }}
+
+        QPushButton:focus {{
+            background-color: {c['primary_hover']};
         }}
         
         QPushButton:disabled {{
@@ -214,6 +218,10 @@ class ThemeManager:
             border-radius: 8px;
             outline: none;
         }}
+
+        QTreeWidget:focus, QListWidget:focus {{
+            border-color: {c['primary']};
+        }}
         
         QTreeWidget::item {{
             padding: 6px;
@@ -242,6 +250,28 @@ class ThemeManager:
             border: 2px solid {c['dark_border']};
             border-radius: 8px;
             outline: none;
+        }}
+
+        /* 侧导航栏 */
+        QListWidget#navList {{
+            background-color: {c['dark_surface']};
+            border: none;
+            border-right: 1px solid {c['dark_border']};
+            border-radius: 0;
+            outline: none;
+        }}
+        QListWidget#navList::item {{
+            padding: 10px 16px;
+            margin: 0;
+            border: none;
+            border-radius: 0;
+        }}
+        QListWidget#navList::item:hover {{
+            background-color: {c['dark_card']};
+        }}
+        QListWidget#navList::item:selected {{
+            background-color: {c['primary']};
+            color: white;
         }}
         
         QListWidget::item {{
@@ -332,9 +362,9 @@ class ThemeManager:
             color: white;
             border: none;
             border-radius: 8px;
-            padding: 10px 20px;
+            padding: 6px 12px;
             font-weight: 600;
-            min-height: 36px;
+            min-height: 32px;
         }}
         
         QPushButton:hover {{
@@ -344,6 +374,10 @@ class ThemeManager:
         QPushButton:pressed {{
             background-color: {c['primary']};
             padding: 11px 19px 9px 21px;
+        }}
+
+        QPushButton:focus {{
+            background-color: {c['primary_hover']};
         }}
         
         QPushButton:disabled {{
@@ -425,7 +459,6 @@ class ThemeManager:
             padding-top: 16px;
             padding: 16px;
             font-weight: 600;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
         }}
         
         QGroupBox::title {{
@@ -469,6 +502,10 @@ class ThemeManager:
             border-radius: 8px;
             outline: none;
         }}
+
+        QTreeWidget:focus, QListWidget:focus {{
+            border-color: {c['primary']};
+        }}
         
         QTreeWidget::item {{
             padding: 6px;
@@ -496,6 +533,28 @@ class ThemeManager:
             border: 2px solid {c['light_border']};
             border-radius: 8px;
             outline: none;
+        }}
+
+        /* 侧导航栏 */
+        QListWidget#navList {{
+            background-color: {c['light_surface']};
+            border: none;
+            border-right: 1px solid {c['light_border']};
+            border-radius: 0;
+            outline: none;
+        }}
+        QListWidget#navList::item {{
+            padding: 10px 16px;
+            margin: 0;
+            border: none;
+            border-radius: 0;
+        }}
+        QListWidget#navList::item:hover {{
+            background-color: {c['light_card']};
+        }}
+        QListWidget#navList::item:selected {{
+            background-color: {c['primary']};
+            color: white;
         }}
         
         QListWidget::item {{

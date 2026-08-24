@@ -35,6 +35,9 @@ def bootstrap(base_dir: Path, app_args=None):
 
     window = MainWindow(app=app)
     window.show()
+    # 防 GC:window 是局部变量,返回后引用归零会导致 C++ 窗口被销毁,
+    # 进程只剩空事件循环(窗口闪现即灭)。挂到 app 上随其存活。
+    app._main_window = window
     return app
 
 

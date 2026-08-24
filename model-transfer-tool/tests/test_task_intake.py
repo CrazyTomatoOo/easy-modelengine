@@ -83,10 +83,26 @@ class TestBuildRemote:
         assert [f.file_size for f in config.files] == [10, 20]
         assert strategies["huggingface"].list_calls == [("org/model", "v1.0")]
 
-    def test_transfer_only_skips_listing(self):
-        config = build(_draft(task_type_name="transfer_local"), strategies=STRATEGIES)
-        assert config.task_type == TaskType.TRANSFER_ONLY
-        assert config.files == []
+    def test_transfer_only_remote_source_rejected(self):
+        """远程源 + 仅传输本地文件 = 0 文件任务秒完成(用户可跳过下载)——必须拒绝。"""
+        draft = _draft(source="modelscope", task_type_name="transfer_local")
+        with pytest.raises(DraftValidationError, match="本地模型来源"):
+            validate(draft, strategies=STRATEGIES)
+
+    def test_build_rejects_empty_repo(self):
+        """仓库无文件 → 拒绝创建(空列表任务秒 completed 且进度 0%)。"""
+        strategies = {"huggingface": FakeStrategy([])}
+        with pytest.raises(DraftValidationError, match="没有可"):
+            build(_draft(), strategies=strategies)
+
+    def test_build_rejects_empty_local_dir(self):
+        """本地空目录传输同样无意义,拒绝。"""
+        import tempfile
+
+        empty = tempfile.mkdtemp()
+        draft = _draft(source="local", model_id=empty, revision="local", task_type_name="transfer_local")
+        with pytest.raises(DraftValidationError, match="没有可"):
+            build(draft, strategies=STRATEGIES)
 
     def test_default_cache_dir(self):
         config = build(_draft(), strategies=STRATEGIES)
@@ -156,14 +172,22 @@ class TestValidate:
 
 
 class TestTaskTypeMapping:
-    def test_maps_all_three_types(self):
+    def test_maps_all_three_types(self, tmp_path):
         mapping = {
             "download_only": TaskType.DOWNLOAD_ONLY,
             "download_transfer": TaskType.FULL_PIPELINE,
             "transfer_local": TaskType.TRANSFER_ONLY,
         }
         for name, expected in mapping.items():
-            config = build(_draft(task_type_name=name), strategies=STRATEGIES)
+            draft = _draft(task_type_name=name)
+            if expected == TaskType.TRANSFER_ONLY:
+                # 仅传输只对本地源合法(新校验);用临时目录承载映射断言
+                (tmp_path / "m.bin").write_bytes(b"x")
+                draft = _draft(
+                    source="local", model_id=str(tmp_path), revision="local",
+                    task_type_name=name,
+                )
+            config = build(draft, strategies=STRATEGIES)
             assert config.task_type == expected
 
 
@@ -214,3 +238,34 @@ class TestResolveStrategy:
     def test_injected_mapping_wins(self):
         strategy = FakeStrategy()
         assert resolve_strategy("custom", strategies={"custom": strategy}) is strategy
+
+
+# 来源 × 任务类型 合法矩阵:正式回归,防止再漏一格(远程+仅传输、本地+下载都是洞)
+_SOURCE_TYPES = [
+    ("huggingface", "download_only", True),
+    ("huggingface", "download_transfer", True),
+    ("huggingface", "transfer_local", False),
+    ("modelscope", "download_only", True),
+    ("modelscope", "download_transfer", True),
+    ("modelscope", "transfer_local", False),
+    ("local", "download_only", False),
+    ("local", "download_transfer", False),
+    ("local", "transfer_local", True),
+]
+
+
+class TestIntakeMatrix:
+    @pytest.mark.parametrize("source,task_type,legit", _SOURCE_TYPES)
+    def test_validate_matrix(self, tmp_path, source, task_type, legit):
+        (tmp_path / "m.bin").write_bytes(b"x")
+        draft = _draft(source=source, task_type_name=task_type)
+        if source == "local":
+            draft = _draft(
+                source="local", model_id=str(tmp_path), revision="local",
+                task_type_name=task_type,
+            )
+        if legit:
+            validate(draft, strategies=STRATEGIES)  # 合法组合必须放行
+        else:
+            with pytest.raises(DraftValidationError):
+                validate(draft, strategies=STRATEGIES)

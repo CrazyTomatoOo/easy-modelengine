@@ -11,7 +11,7 @@ from core.verifier import FileVerifier
 class WorkerSignals(QObject):
     """Worker 信号定义"""
 
-    progress = pyqtSignal(str, str, int, int)
+    progress = pyqtSignal(str, str, 'qlonglong', 'qlonglong')
     finished = pyqtSignal(str, str, bool)
     error = pyqtSignal(str, str, str)
 
